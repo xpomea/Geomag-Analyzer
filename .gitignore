@@ -1,5 +1,6 @@
 # Read-only raw source dataset (keep untracked)
 GeoMag_Storms_Dataset_Oct-2026/
+Materials/
 
 # Generated normalized data & precomputed caches
 data/
