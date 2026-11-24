@@ -76,11 +76,20 @@ class CacheManager:
         self.user_cache_dir = Path(user_cache_dir)
         self.runtime_db_path = Path(runtime_db_path)
         self._lock = threading.RLock()
+        self._key_locks: dict[str, threading.RLock] = {}
 
         self.runtime_db_path.parent.mkdir(parents=True, exist_ok=True)
         for cat in _VALID_CATEGORIES:
             (self.user_cache_dir / cat).mkdir(parents=True, exist_ok=True)
         self._init_runtime_db()
+
+    def _lock_for_key(self, cache_key: str) -> threading.RLock:
+        with self._lock:
+            lock = self._key_locks.get(cache_key)
+            if lock is None:
+                lock = threading.RLock()
+                self._key_locks[cache_key] = lock
+            return lock
 
     def connect_runtime(self) -> sqlite3.Connection:
         """Open a short-lived WAL-mode SQLite connection to runtime.sqlite."""
@@ -165,39 +174,42 @@ class CacheManager:
         compute_fn: Any,
     ) -> tuple[Phase1StationSpectra, bool]:
         """Load Phase 1 station spectra from cache or compute and store atomically."""
-        hit = self.find("spectra_phase1", cache_key)
-        if hit is not None:
-            path, source = hit
-            spectra = load_phase1_cache(path)
-            if spectra.cache_key == cache_key:
-                self.register_entry(
-                    cache_key=cache_key,
-                    category="spectra_phase1",
-                    file_path=path,
-                    source=source,
-                    params=params,
-                )
-                return spectra, True
+        with self._lock_for_key(cache_key):
+            hit = self.find("spectra_phase1", cache_key)
+            if hit is not None:
+                path, source = hit
+                spectra = load_phase1_cache(path)
+                if spectra.cache_key == cache_key:
+                    self.register_entry(
+                        cache_key=cache_key,
+                        category="spectra_phase1",
+                        file_path=path,
+                        source=source,
+                        params=params,
+                    )
+                    return spectra, True
 
-        spectra = compute_fn()
-        target = self.user_path_for("spectra_phase1", cache_key)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = target.with_name(f".{cache_key}.{os.getpid()}.{threading.get_ident()}.tmp.npz")
-        try:
-            save_phase1_cache(tmp_path, spectra)
-            os.replace(tmp_path, target)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
+            spectra = compute_fn()
+            target = self.user_path_for("spectra_phase1", cache_key)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = target.with_name(
+                f".{cache_key}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
+            )
+            try:
+                save_phase1_cache(tmp_path, spectra)
+                os.replace(tmp_path, target)
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
 
-        self.register_entry(
-            cache_key=cache_key,
-            category="spectra_phase1",
-            file_path=target,
-            source="user",
-            params=params,
-        )
-        return spectra, False
+            self.register_entry(
+                cache_key=cache_key,
+                category="spectra_phase1",
+                file_path=target,
+                source="user",
+                params=params,
+            )
+            return spectra, False
 
     def list_entries(self, category: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         """List indexed cache entries from runtime.sqlite."""

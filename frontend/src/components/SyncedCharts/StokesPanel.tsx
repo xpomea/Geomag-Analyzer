@@ -382,7 +382,8 @@ export const StokesPanel: React.FC = () => {
             <div className="kpi-box">
               <div className="kpi-label">Когерент. γ²</div>
               <div className="kpi-val">
-                {formatNum(s2.gamma2)} (&gt;{formatNum(s2.gamma2_crit)})
+                {formatNum(s2.gamma2)} (
+                {s2.is_significant_gamma2 ? ">" : "≤"} {formatNum(s2.gamma2_crit)})
               </div>
             </div>
             <div className="kpi-box">

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import * as echarts from "echarts";
 import { ArrowLeftRight, ChevronDown, ChevronUp, Database, GitBranch } from "lucide-react";
 import type { CrossComponent } from "../../api/types";
@@ -186,14 +186,13 @@ export const WelchCrossPanel: React.FC = () => {
     onCursorChange: (utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs }),
   });
 
-  // Separate non-time ECharts chart for Meridional FLR profile
-  const flrChartHostRef = useRef<HTMLDivElement | null>(null);
+  // Separate non-time ECharts chart for Meridional FLR profile (callback-ref safe)
+  const [flrHostEl, setFlrHostEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
-    const host = flrChartHostRef.current;
-    if (!host || !flrProfile || !flrOpen) return;
-    const chart = echarts.init(host);
+    if (!flrHostEl || !flrProfile || !flrOpen) return;
+    const chart = echarts.init(flrHostEl);
     const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(host);
+    ro.observe(flrHostEl);
 
     chart.setOption({
       animation: false,
@@ -261,7 +260,7 @@ export const WelchCrossPanel: React.FC = () => {
       ro.disconnect();
       chart.dispose();
     };
-  }, [flrProfile, flrOpen]);
+  }, [flrHostEl, flrProfile, flrOpen]);
 
   const bandGuides = useMemo<BandGuide[]>(
     () => [{ value: 1 / 600, label: "600с", color: "rgba(248, 250, 252, 0.72)" }],
@@ -482,7 +481,7 @@ export const WelchCrossPanel: React.FC = () => {
                 Пик амплитуды: {flrProfile.peak_station} ({formatNum(flrProfile.peak_latitude_deg, 2)}°N)
               </span>
             </div>
-            <div ref={flrChartHostRef} style={{ width: "100%", height: 220 }} />
+            <div ref={setFlrHostEl} style={{ width: "100%", height: 220 }} />
           </div>
         )}
       </div>

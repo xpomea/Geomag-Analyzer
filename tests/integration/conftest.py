@@ -18,17 +18,17 @@ def make_test_client(tmp_path: Path) -> Callable[..., tuple[TestClient, ApiSetti
     created_clients: list[TestClient] = []
 
     def _factory(**overrides) -> tuple[TestClient, ApiSettings]:
-        static_cache = tmp_path / "static_cache"
-        user_data = tmp_path / "user_data"
+        static_cache = Path(overrides.pop("static_cache_dir", tmp_path / "static_cache"))
+        user_data = Path(overrides.pop("user_data_dir", tmp_path / "user_data"))
         static_cache.mkdir(parents=True, exist_ok=True)
         user_data.mkdir(parents=True, exist_ok=True)
 
         settings = ApiSettings(
-            processed_dir=DEFAULT_PROCESSED_DIR,
+            processed_dir=overrides.pop("processed_dir", DEFAULT_PROCESSED_DIR),
             static_cache_dir=static_cache,
             user_data_dir=user_data,
-            max_workers=2,
-            max_mc_surrogates=1000,
+            max_workers=overrides.pop("max_workers", 2),
+            max_mc_surrogates=overrides.pop("max_mc_surrogates", 1000),
             **overrides,
         )
         app = create_app(settings)

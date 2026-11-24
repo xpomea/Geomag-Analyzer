@@ -98,6 +98,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             catalog_stations=len(store.get_stations()),
             catalog_episodes=len(store.get_episodes()),
             require_auth=settings_dep.require_auth,
+            can_shutdown=settings_dep.shutdown_callback is not None,
         )
 
     @application.get("/api/auth/bootstrap", response_model=BootstrapResponse, tags=["auth"])
@@ -148,10 +149,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @application.post("/api/shutdown", response_model=ShutdownResponse, tags=["system"])
     def shutdown_server(
         settings_dep: SettingsDep,
-    ) -> ShutdownResponse:
+    ) -> ShutdownResponse | JSONResponse:
         """Cleanly shut down worker pool and desktop/browser server instance."""
-        if settings_dep.shutdown_callback is not None:
-            settings_dep.shutdown_callback()
+        if settings_dep.shutdown_callback is None:
+            return JSONResponse(
+                {"detail": "Shutdown endpoint is unavailable in headless/uvicorn mode."},
+                status_code=501,
+            )
+        settings_dep.shutdown_callback()
         return ShutdownResponse(status="shutting_down", message="Server shutdown triggered.")
 
     application.include_router(routes_catalog.router)

@@ -30,6 +30,8 @@ import {
 } from "../api/client";
 import type {
   CatalogResponse,
+  CoordFrame,
+  CrossComponent,
   EpisodeInfo,
   GeomagTimeseriesResponse,
   HealthResponse,
@@ -64,7 +66,7 @@ interface AuthStatusState {
   error: string | null;
 }
 
-interface AnalysisContextValue {
+export interface AnalysisContextValue {
   state: AnalysisState;
   dispatch: React.Dispatch<AnalysisAction>;
   auth: AuthStatusState;
@@ -108,7 +110,7 @@ interface AnalysisContextValue {
   triggerShutdown: () => Promise<void>;
 }
 
-const AnalysisContext = createContext<AnalysisContextValue | null>(null);
+export const AnalysisContext = createContext<AnalysisContextValue | null>(null);
 
 export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(analysisReducer, INITIAL_ANALYSIS_STATE);
@@ -128,7 +130,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [welchPairRaw, setWelchPairRaw] = useState<WelchPairResponse | null>(null);
   const [flrProfile, setFlrProfile] = useState<MeridionalFLRResponse | null>(null);
   const [wtcResult, setWtcResult] = useState<WTCResultResponse | null>(null);
-  const [wtcStride, setWtcStride] = useState<number>(2);
 
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [loadingTimeseries, setLoadingTimeseries] = useState(false);
@@ -462,7 +463,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const warnB = getStationBaselineWarning(
       stationMetaMap.get(state.stationB),
       state.coordFrame,
-      null,
+      state.externalD0DegB,
     );
     if (warnA || warnB) {
       setWelchPairRaw(null);
@@ -482,6 +483,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         component: state.crossComponent,
         coord_frame: state.coordFrame,
         external_d0_deg_i: state.externalD0Deg,
+        external_d0_deg_j: state.externalD0DegB,
         band: state.band,
         t_max_pc6_sec: state.tMaxPc6Sec,
         L: state.L,
@@ -523,6 +525,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     state.crossComponent,
     state.coordFrame,
     state.externalD0Deg,
+    state.externalD0DegB,
     state.band,
     state.tMaxPc6Sec,
     state.L,
@@ -593,23 +596,49 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   }, []);
 
+  useEffect(() => {
+    setFlrProfile(null);
+  }, [state.episodeId]);
+
   const openWtcJobResult = useCallback(
-    async (jobId: string, stride = wtcStride) => {
-      setWtcStride(stride);
+    async (jobId: string, strideOverride?: number) => {
+      const effStride = strideOverride ?? state.wtcStride;
+      if (strideOverride !== undefined && strideOverride !== state.wtcStride) {
+        dispatch({ type: "SET_WTC_STRIDE", stride: strideOverride });
+      }
       setLoadingWtcResult(true);
       setWtcError(null);
       try {
-        const res = await getWtcJobResult(jobId, stride);
+        const res = await getWtcJobResult(jobId, effStride);
+        const ep = catalog?.episodes.find((e) => e.episode_id === res.episode_id);
+        let bounds: [number, number] | null = null;
+        if (ep) {
+          bounds = [Date.parse(ep.start_utc), Date.parse(ep.end_utc)];
+        } else if (res.timestamps_utc.length >= 2) {
+          bounds = [
+            Date.parse(res.timestamps_utc[0]),
+            Date.parse(res.timestamps_utc[res.timestamps_utc.length - 1]),
+          ];
+        }
+        const coordFrame: CoordFrame = res.coord_frame === "XmYm" ? "XmYm" : "XYZ";
+        dispatch({
+          type: "OPEN_WTC_JOB",
+          jobId,
+          episodeId: res.episode_id,
+          stationA: res.station_i,
+          stationB: res.station_j,
+          component: res.component as CrossComponent,
+          coordFrame,
+          boundsMs: bounds,
+        });
         setWtcResult(res);
-        dispatch({ type: "SET_ACTIVE_WTC_JOB", jobId });
-        dispatch({ type: "SET_ACTIVE_CROSS_TAB", tab: "wtc" });
       } catch (err) {
         setWtcError(err instanceof ApiError ? err.detail : (err as Error).message);
       } finally {
         setLoadingWtcResult(false);
       }
     },
-    [wtcStride],
+    [state.wtcStride, catalog],
   );
 
   // Auto-load active WTC result once its job completes/caches
@@ -630,9 +659,9 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       (activeJobObj.status === "completed" || activeJobObj.status === "cached") &&
       wtcResult?.job_id !== activeJobObj.job_id
     ) {
-      void openWtcJobResult(activeJobObj.job_id, wtcStride);
+      void openWtcJobResult(activeJobObj.job_id, state.wtcStride);
     }
-  }, [activeJobObj, wtcResult?.job_id, openWtcJobResult, wtcStride]);
+  }, [activeJobObj, wtcResult?.job_id, openWtcJobResult, state.wtcStride]);
 
   const launchWtcJob = useCallback(
     async (overrides: Partial<WTCJobRequest> = {}) => {
@@ -645,6 +674,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         component: state.crossComponent,
         coord_frame: state.coordFrame,
         external_d0_deg_i: state.externalD0Deg,
+        external_d0_deg_j: state.externalD0DegB,
         period_min_sec: 120,
         period_max_sec: 3600,
         dj: 1 / 12,
@@ -674,6 +704,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       state.crossComponent,
       state.coordFrame,
       state.externalD0Deg,
+      state.externalD0DegB,
       state.alpha,
     ],
   );

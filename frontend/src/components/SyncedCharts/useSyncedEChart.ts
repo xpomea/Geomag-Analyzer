@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 
 export const CHART_GRID_LEFT = 68;
@@ -20,7 +20,7 @@ export function useSyncedEChart({
   onViewRangeChange,
   onCursorChange,
 }: UseSyncedEChartArgs) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   const isSyncingRef = useRef(false);
 
@@ -34,12 +34,11 @@ export function useSyncedEChart({
   onCursorRef.current = onCursorChange;
   const lastCursorEmitRef = useRef(0);
 
-  // Initialize ECharts instance + ResizeObserver + group sync
+  // Initialize ECharts whenever the underlying DOM container mounts or remounts
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    if (!containerEl) return;
 
-    const chart = echarts.init(el, undefined, { renderer: "canvas" });
+    const chart = echarts.init(containerEl, undefined, { renderer: "canvas" });
     chartRef.current = chart;
     chart.group = CHART_SYNC_GROUP;
     echarts.connect(CHART_SYNC_GROUP);
@@ -47,7 +46,7 @@ export function useSyncedEChart({
     const observer = new ResizeObserver(() => {
       chart.resize();
     });
-    observer.observe(el);
+    observer.observe(containerEl);
 
     const handleDataZoom = () => {
       if (isSyncingRef.current) return;
@@ -106,9 +105,9 @@ export function useSyncedEChart({
       chart.dispose();
       chartRef.current = null;
     };
-  }, []);
+  }, [containerEl]);
 
-  // Apply option updates
+  // Apply option updates (also runs right after chart initializes on mount/remount)
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !option) return;
@@ -130,7 +129,7 @@ export function useSyncedEChart({
         isSyncingRef.current = false;
       });
     }
-  }, [option]);
+  }, [option, containerEl]);
 
   // Apply external viewRangeMs updates
   useEffect(() => {
@@ -164,9 +163,9 @@ export function useSyncedEChart({
         isSyncingRef.current = false;
       });
     }
-  }, [viewRangeMs, option]);
+  }, [viewRangeMs, option, containerEl]);
 
-  return { containerRef, chartRef };
+  return { containerRef: setContainerEl, chartRef };
 }
 
 export function computeCursorOverlayPercent(

@@ -81,6 +81,23 @@ def test_geomag_timeseries_despiked_baseless_guard_and_absent_station(api_client
     assert r_gck_xmy_ok.status_code == 200
     assert abs(r_gck_xmy_ok.json()["d0_deg"] - 5.0) < 1e-9
 
+    # Episode-level D0 invariance across full episode vs 6-hour sub-slice
+    d0_full = client.get(
+        "/api/timeseries/geomag",
+        params={"episode_id": "storm_20261009_11", "station_iaga": "LVV", "coord_frame": "XmYm"},
+    ).json()["d0_deg"]
+    d0_slice = client.get(
+        "/api/timeseries/geomag",
+        params={
+            "episode_id": "storm_20261009_11",
+            "station_iaga": "LVV",
+            "coord_frame": "XmYm",
+            "start_utc": "2026-10-10T00:00:00Z",
+            "end_utc": "2026-10-10T05:59:00Z",
+        },
+    ).json()["d0_deg"]
+    assert abs(d0_full - d0_slice) < 1e-9
+
     # Incomplete station SUA on storm_20261004_05 (present only Oct 30-31)
     r_sua = client.get(
         "/api/timeseries/geomag",

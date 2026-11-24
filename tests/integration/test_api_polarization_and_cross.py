@@ -79,6 +79,51 @@ def test_polarization_all_methods_real_stations_and_incomplete_handling(api_clie
     assert r_sua.json()["is_valid"] is False
     assert r_sua.json()["warnings"]
 
+    # Multitaper red spectrum reduces n_eff vs flat spectrum; Kaiser trim_hours=0 keeps final window
+    r_mt_flat = client.post(
+        "/api/polarization",
+        headers=headers,
+        json={
+            "episode_id": "storm_20261004_05",
+            "station_iaga": "BEL",
+            "method": "multitaper",
+            "band": "Pc5",
+            "spectrum_type": "flat",
+            "include_dynamic": False,
+        },
+    )
+    r_mt_red = client.post(
+        "/api/polarization",
+        headers=headers,
+        json={
+            "episode_id": "storm_20261004_05",
+            "station_iaga": "BEL",
+            "method": "multitaper",
+            "band": "Pc5",
+            "spectrum_type": "red",
+            "include_dynamic": False,
+        },
+    )
+    assert r_mt_flat.status_code == 200 and r_mt_red.status_code == 200
+    assert r_mt_red.json()["n_eff"] < r_mt_flat.json()["n_eff"]
+
+    r_kaiser0 = client.post(
+        "/api/polarization",
+        headers=headers,
+        json={
+            "episode_id": "storm_20261004_05",
+            "station_iaga": "BEL",
+            "method": "variant_b_fft",
+            "oversample_method": "kaiser",
+            "oversample_m": 4,
+            "trim_hours": 0.0,
+            "window_samples": 360,
+            "step_samples": 360,
+        },
+    )
+    assert r_kaiser0.status_code == 200
+    assert r_kaiser0.json()["dynamic"]["is_valid"][-1] is True
+
     # GCK without external D0 -> 422
     r_gck = client.post(
         "/api/polarization",
@@ -181,3 +226,36 @@ def test_cross_welch_pair_matrix_and_flr_with_phase1_cache(api_client):
     flr = r_flr.json()
     assert flr["peak_station"] in {"HRN", "ABK", "KIR", "LYC", "BEL", "LVV", "PAG"}
     assert math.isfinite(flr["peak_latitude_deg"])
+
+    # Component / coord_frame mismatch -> 422 across Welch endpoints
+    assert (
+        client.post(
+            "/api/cross/welch/pair",
+            headers=headers,
+            json={**pair_req, "coord_frame": "XYZ", "component": "Xm"},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/cross/welch/matrix",
+            headers=headers,
+            json={**mat_req, "coord_frame": "XmYm", "component": "X"},
+        ).status_code
+        == 422
+    )
+
+    # Concurrent Phase 1 cache access under per-key locking
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = [
+            pool.submit(
+                client.post,
+                "/api/cross/welch/pair",
+                headers=headers,
+                json={**pair_req, "component": "Y", "station_j": "WNG"},
+            )
+            for _ in range(4)
+        ]
+        assert all(f.result().status_code == 200 for f in futs)

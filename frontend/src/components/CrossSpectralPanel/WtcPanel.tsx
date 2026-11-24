@@ -4,6 +4,7 @@ import { TERMINAL_JOB_STATUSES } from "../../api/client";
 import type { GapPolicy } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { formatEta } from "../../utils/formatters";
+import { DraftNumberInput } from "../Layout/DraftNumberInput";
 import { ScientificHeatmap2D } from "../SyncedCharts/ScientificHeatmap2D";
 
 export const WtcPanel: React.FC = () => {
@@ -16,6 +17,7 @@ export const WtcPanel: React.FC = () => {
     wtcError,
     launchWtcJob,
     cancelWtcJob,
+    openWtcJobResult,
   } = useAnalysis();
 
   const [periodMinSec, setPeriodMinSec] = useState(120);
@@ -25,7 +27,6 @@ export const WtcPanel: React.FC = () => {
   const [gapPolicy, setGapPolicy] = useState<GapPolicy>("subsegments");
   const [nSurrogates, setNSurrogates] = useState(300);
   const [seed, setSeed] = useState(42);
-  const [stride, setStride] = useState(2);
 
   const [mapView, setMapView] = useState<"wtc" | "xwt">("wtc");
   const [showContours, setShowContours] = useState(true);
@@ -41,7 +42,7 @@ export const WtcPanel: React.FC = () => {
   const handleLaunch = () => {
     void launchWtcJob({
       period_min_sec: periodMinSec,
-      period_max_sec: periodMaxSec,
+      period_max_sec: Math.max(periodMinSec + 60, periodMaxSec),
       dj,
       omega0,
       gap_policy: gapPolicy,
@@ -51,11 +52,15 @@ export const WtcPanel: React.FC = () => {
     });
   };
 
+  const hasMc = Boolean(wtcResult && wtcResult.n_surrogates > 0);
+  const mcConfPct = Math.round((1 - (wtcResult?.alpha ?? state.alpha)) * 100);
+
   const phaseVectorsProp = useMemo(() => {
     if (!showArrows || !wtcResult) return null;
     return {
       phaseDeg: mapView === "wtc" ? wtcResult.wtc_phase_deg : wtcResult.xwt_phase_deg,
-      sigMask: wtcResult.wtc_is_significant,
+      // When Monte Carlo was disabled (N=0), show arrows inside COI instead of masking all
+      sigMask: wtcResult.n_surrogates > 0 ? wtcResult.wtc_is_significant : wtcResult.inside_coi,
     };
   }, [showArrows, wtcResult, mapView]);
 
@@ -82,37 +87,33 @@ export const WtcPanel: React.FC = () => {
       >
         <label className="field-label">
           <span>T_min [с]</span>
-          <input
-            type="number"
+          <DraftNumberInput
             min={60}
             max={1200}
             step={30}
             value={periodMinSec}
-            onChange={(e) => setPeriodMinSec(Math.max(60, Number(e.target.value) || 120))}
+            onCommit={setPeriodMinSec}
           />
         </label>
         <label className="field-label">
           <span>T_max [с]</span>
-          <input
-            type="number"
+          <DraftNumberInput
             min={300}
             max={14400}
             step={300}
             value={periodMaxSec}
-            onChange={(e) => setPeriodMaxSec(Math.max(300, Number(e.target.value) || 3600))}
+            onCommit={setPeriodMaxSec}
           />
         </label>
         <label className="field-label">
           <span>Суррогаты AR(1)</span>
-          <input
-            type="number"
+          <DraftNumberInput
             min={0}
             max={1000}
             step={50}
+            integer
             value={nSurrogates}
-            onChange={(e) =>
-              setNSurrogates(Math.min(1000, Math.max(0, Number(e.target.value) || 0)))
-            }
+            onCommit={setNSurrogates}
           />
         </label>
         <label className="field-label">
@@ -133,25 +134,33 @@ export const WtcPanel: React.FC = () => {
               <option value={1 / 8}>1/8</option>
               <option value={1 / 6}>1/6</option>
             </select>
-            <input
-              type="number"
+            <DraftNumberInput
               min={4}
               max={10}
               step={1}
               value={omega0}
-              onChange={(e) => setOmega0(Math.max(4, Number(e.target.value) || 6))}
+              onCommit={setOmega0}
             />
           </div>
         </label>
         <label className="field-label">
           <span>Seed / Децим.</span>
           <div className="field-row">
-            <input
-              type="number"
+            <DraftNumberInput
+              integer
               value={seed}
-              onChange={(e) => setSeed(Number(e.target.value) || 42)}
+              onCommit={setSeed}
             />
-            <select value={stride} onChange={(e) => setStride(Number(e.target.value))}>
+            <select
+              value={state.wtcStride}
+              onChange={(e) => {
+                const nextStride = Number(e.target.value);
+                dispatch({ type: "SET_WTC_STRIDE", stride: nextStride });
+                if (wtcResult) {
+                  void openWtcJobResult(wtcResult.job_id, nextStride);
+                }
+              }}
+            >
               <option value={1}>×1 (1м)</option>
               <option value={2}>×2 (2м)</option>
               <option value={4}>×4 (4м)</option>
@@ -275,10 +284,11 @@ export const WtcPanel: React.FC = () => {
               </div>
               <button
                 type="button"
-                className={`btn btn-sm ${showContours ? "btn-primary" : ""}`}
+                className={`btn btn-sm ${showContours && hasMc ? "btn-primary" : ""}`}
+                disabled={!hasMc}
                 onClick={() => setShowContours((v) => !v)}
               >
-                95% MC контур
+                {hasMc ? `${mcConfPct}% MC контур` : "MC отключён (N=0)"}
               </button>
               <button
                 type="button"

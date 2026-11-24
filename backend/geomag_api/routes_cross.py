@@ -19,7 +19,7 @@ from geomag_core import (
 )
 
 from .cache import CacheManager
-from .data_store import DataStore, StationEpisodeData
+from .data_store import DataStore, StationEpisodeData, resolve_component_index
 from .deps import CacheDep, StoreDep
 from .schemas import (
     AzimuthalOut,
@@ -37,17 +37,6 @@ router = APIRouter(prefix="/api/cross/welch", tags=["cross-welch"])
 _DEFAULT_QC_PARAMS = {"max_missing_frac": 0.05, "max_gap": 3}
 
 
-def _component_index(component: str) -> int:
-    key = component.strip().upper()
-    if key in ("X", "XM"):
-        return 0
-    if key in ("Y", "YM"):
-        return 1
-    if key == "Z":
-        return 2
-    raise ValueError(f"Unsupported component {component!r}")
-
-
 def _get_or_compute_phase1(
     store: DataStore,
     cache: CacheManager,
@@ -61,12 +50,12 @@ def _get_or_compute_phase1(
     window_samples: int,
     step_samples: int,
 ) -> tuple[Phase1StationSpectra, bool]:
+    canon_frame, comp_idx = resolve_component_index(component, coord_frame)
     xyz, d0_deg, canon_frame = store.apply_coord_frame(
         data,
-        coord_frame=coord_frame,
+        coord_frame=canon_frame,
         external_d0_deg=external_d0_deg,
     )
-    comp_idx = _component_index(component)
     cache_key = build_phase1_cache_key(
         gc.__version__,
         episode_id=data.episode_id,
@@ -119,6 +108,7 @@ def cross_welch_pair(
     cache: CacheDep,
 ) -> WelchPairResponse:
     """Compute Phase 2 pairwise Welch cross-spectrum strictly over joint valid segments."""
+    canon_frame, _ = resolve_component_index(req.component, req.coord_frame)
     if req.window_samples < req.L:
         raise ValueError(f"window_samples ({req.window_samples}) must be >= L ({req.L}).")
 
@@ -248,6 +238,7 @@ def cross_welch_matrix(
     cache: CacheDep,
 ) -> WelchMatrixResponse:
     """Compute S x S dynamic all-pairs Welch cross-spectral matrix via BLAS GEMM."""
+    resolve_component_index(req.component, req.coord_frame)
     if req.window_samples < req.L:
         raise ValueError(f"window_samples ({req.window_samples}) must be >= L ({req.L}).")
     store.require_episode(req.episode_id)
@@ -328,6 +319,7 @@ def cross_welch_flr(
     cache: CacheDep,
 ) -> MeridionalFLRResponse:
     """Compute meridional amplitude and phase gradient profile across a latitudinal chain."""
+    resolve_component_index(req.component, req.coord_frame)
     if req.window_samples < req.L:
         raise ValueError(f"window_samples ({req.window_samples}) must be >= L ({req.L}).")
     store.require_episode(req.episode_id)

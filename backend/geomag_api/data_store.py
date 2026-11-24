@@ -72,6 +72,35 @@ class NotFoundError(LookupError):
     """Raised when an episode, station, job, or resource ID does not exist."""
 
 
+def resolve_component_index(component: str, coord_frame: str) -> tuple[str, int]:
+    """Validate component/coord_frame consistency and return (canonical_frame, xyz_col_index)."""
+    frame_upper = coord_frame.strip().upper()
+    comp_upper = component.strip().upper()
+    if frame_upper == "XYZ":
+        if comp_upper == "X":
+            return "XYZ", 0
+        if comp_upper == "Y":
+            return "XYZ", 1
+        if comp_upper == "Z":
+            return "XYZ", 2
+        raise ValueError(
+            f"Component {component!r} is incompatible with coord_frame='XYZ' "
+            "(expected 'X', 'Y', or 'Z')."
+        )
+    if frame_upper == "XMYM":
+        if comp_upper == "XM":
+            return "XmYm", 0
+        if comp_upper == "YM":
+            return "XmYm", 1
+        if comp_upper == "Z":
+            return "XmYm", 2
+        raise ValueError(
+            f"Component {component!r} is incompatible with coord_frame='XmYm' "
+            "(expected 'Xm', 'Ym', or 'Z')."
+        )
+    raise ValueError(f"Unsupported coord_frame {coord_frame!r}; expected 'XYZ' or 'XmYm'.")
+
+
 @dataclass(frozen=True)
 class StationEpisodeData:
     """Magnetometer time series slice loaded strictly read-only for one station/episode."""
@@ -238,6 +267,7 @@ class DataStore:
             )
         self._lock = threading.RLock()
         self._geomag_cache: dict[str, pd.DataFrame] = {}
+        self._d0_cache: dict[tuple[str, str], float] = {}
         self._solar1_df: pd.DataFrame | None = None
         self._omni_df: pd.DataFrame | None = None
         self._oulu_df: pd.DataFrame | None = None
@@ -476,24 +506,17 @@ class DataStore:
                 f"Unsupported coord_frame {coord_frame!r}; expected 'XYZ' or 'XmYm'."
             )
 
-        has_base = bool(data.station_meta["has_baseline"])
-        if not data.available:
-            if not has_base and external_d0_deg is None:
-                raise ValueError(
-                    f"Automatic D0 rotation is disabled for baseless station {data.station_iaga}."
-                )
-            d0_deg = float(external_d0_deg) if external_d0_deg is not None else 0.0
-            return data.to_xyz_matrix(), d0_deg, "XmYm"
-
-        d0_rad = compute_quiet_declination_rad(
-            data.x_nT,
-            data.y_nT,
-            data.z_nT,
-            has_baseline=has_base,
+        d0_deg = self.compute_station_d0_deg(
+            data.episode_id,
+            data.station_iaga,
+            coord_frame="XmYm",
             external_d0_deg=external_d0_deg,
         )
-        xyz_rot = rotate_xyz_to_magnetic(data.to_xyz_matrix(), d0_rad)
-        return xyz_rot, math.degrees(d0_rad), "XmYm"
+        if not data.available:
+            return data.to_xyz_matrix(), d0_deg, "XmYm"
+
+        xyz_rot = rotate_xyz_to_magnetic(data.to_xyz_matrix(), math.radians(d0_deg))
+        return xyz_rot, d0_deg, "XmYm"
 
     def compute_station_d0_deg(
         self,
@@ -503,14 +526,46 @@ class DataStore:
         coord_frame: str = "XYZ",
         external_d0_deg: float | None = None,
     ) -> float:
-        """Compute canonical episode-level D0 [deg] for Phase 1 / WTC cache keys."""
+        """Compute canonical episode-level D0 [deg] for Phase 1 / WTC cache keys and slices."""
         frame_key = coord_frame.strip().upper()
         if frame_key == "XYZ":
             return 0.0
-        full_data = self.load_station_episode(episode_id, station_iaga)
-        _, d0_deg, _ = self.apply_coord_frame(
-            full_data, coord_frame="XmYm", external_d0_deg=external_d0_deg
-        )
+        if frame_key != "XMYM":
+            raise ValueError(
+                f"Unsupported coord_frame {coord_frame!r}; expected 'XYZ' or 'XmYm'."
+            )
+
+        st = self.require_magnetometer(station_iaga)
+        code = st["iaga_code"]
+        has_base = bool(st["has_baseline"])
+        if not has_base and external_d0_deg is None:
+            raise ValueError(
+                f"Automatic D0 rotation is disabled for baseless station {code}."
+            )
+        if external_d0_deg is not None:
+            return float(external_d0_deg)
+
+        key = (episode_id, code)
+        with self._lock:
+            cached = self._d0_cache.get(key)
+            if cached is not None:
+                return cached
+
+        full_data = self.load_station_episode(episode_id, code)
+        if not full_data.available:
+            d0_deg = 0.0
+        else:
+            d0_rad = compute_quiet_declination_rad(
+                full_data.x_nT,
+                full_data.y_nT,
+                full_data.z_nT,
+                has_baseline=True,
+                external_d0_deg=None,
+            )
+            d0_deg = math.degrees(d0_rad)
+
+        with self._lock:
+            self._d0_cache[key] = d0_deg
         return d0_deg
 
     def load_solar1(

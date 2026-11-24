@@ -2,7 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MIN_ZOOM_SPAN_MS } from "../../store/analysisReducer";
 import { buildColorLut, extractSignificanceContours, type ColormapName } from "../../utils/contours";
 import { formatUtcFull, formatUtcShort } from "../../utils/formatters";
-import { CHART_GRID_LEFT, CHART_GRID_RIGHT } from "./useSyncedEChart";
+import {
+  CHART_GRID_LEFT,
+  CHART_GRID_RIGHT,
+  computeCursorOverlayPercent,
+} from "./useSyncedEChart";
 
 export interface BandGuide {
   value: number;
@@ -41,6 +45,8 @@ export interface ScientificHeatmap2DProps {
   height?: number;
 }
 
+const OFFSCREEN_RASTER_H = 256;
+
 function defaultYFormatter(y: number): string {
   if (y < 0.05) {
     return `${(y * 1000).toFixed(2)} мГц`;
@@ -76,7 +82,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
   phaseVectors,
   height = 250,
 }) => {
-  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [width, setWidth] = useState(720);
   const [hoverInfo, setHoverInfo] = useState<{
@@ -87,22 +93,21 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     zVal: number | null;
   } | null>(null);
   const dragRef = useRef<{ startX: number; origRange: [number, number] } | null>(null);
+  const lastCursorEmitRef = useRef(0);
 
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
+    if (!wrapEl) return;
     const ro = new ResizeObserver((entries) => {
-      const nextW = Math.floor(entries[0]?.contentRect.width ?? el.clientWidth);
+      const nextW = Math.floor(entries[0]?.contentRect.width ?? wrapEl.clientWidth);
       if (nextW > 180) {
         setWidth(nextW);
       }
     });
-    ro.observe(el);
+    ro.observe(wrapEl);
     return () => ro.disconnect();
-  }, []);
+  }, [wrapEl]);
 
   const timesMs = useMemo(() => timestampsUtc.map((s) => Date.parse(s)), [timestampsUtc]);
-
   const lut = useMemo(() => buildColorLut(colormap), [colormap]);
 
   const { zLow, zHigh } = useMemo(() => {
@@ -149,6 +154,42 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
   const plotW = plotRight - plotLeft;
   const plotH = plotBottom - plotTop;
 
+  const wheelStateRef = useRef({
+    effectiveRange,
+    plotLeft,
+    plotW,
+    onViewRangeChange,
+  });
+  wheelStateRef.current = {
+    effectiveRange,
+    plotLeft,
+    plotW,
+    onViewRangeChange,
+  };
+
+  // Native non-passive wheel listener avoids passive-event warnings and blocks page scroll during zoom
+  useEffect(() => {
+    if (!wrapEl) return;
+    const onNativeWheel = (e: WheelEvent) => {
+      const { effectiveRange: er, plotLeft: pl, plotW: pw, onViewRangeChange: emit } =
+        wheelStateRef.current;
+      if (pw <= 0) return;
+      e.preventDefault();
+      const rect = wrapEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const frac = Math.min(1, Math.max(0, (x - pl) / pw));
+      const [s, en] = er;
+      const span = en - s;
+      const factor = e.deltaY > 0 ? 1.25 : 0.8;
+      const anchor = s + frac * span;
+      const nextSpan = Math.max(MIN_ZOOM_SPAN_MS, span * factor);
+      const nextS = anchor - frac * nextSpan;
+      emit([nextS, nextS + nextSpan]);
+    };
+    wrapEl.addEventListener("wheel", onNativeWheel, { passive: false });
+    return () => wrapEl.removeEventListener("wheel", onNativeWheel);
+  }, [wrapEl]);
+
   const yBounds = useMemo(() => {
     if (yValues.length === 0) return { min: 0, max: 1 };
     const first = yValues[0];
@@ -156,23 +197,28 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     return { min: Math.min(first, last), max: Math.max(first, last) };
   }, [yValues]);
 
-  const yToPixel = useMemo(() => {
+  const yToNorm = useMemo(() => {
     const yMinV = yBounds.min;
     const yMaxV = yBounds.max;
     return (y: number): number => {
-      let norm: number;
       if (yScaleMode === "log") {
         const l0 = Math.log10(Math.max(1e-12, yMinV));
         const l1 = Math.log10(Math.max(1e-12, yMaxV));
         const ly = Math.log10(Math.max(1e-12, y));
-        norm = l1 === l0 ? 0.5 : (ly - l0) / (l1 - l0);
-      } else {
-        norm = yMaxV === yMinV ? 0.5 : (y - yMinV) / (yMaxV - yMinV);
+        return l1 === l0 ? 0.5 : (ly - l0) / (l1 - l0);
       }
+      return yMaxV === yMinV ? 0.5 : (y - yMinV) / (yMaxV - yMinV);
+    };
+  }, [yBounds, yScaleMode]);
+
+  const yToPixel = useMemo(
+    () => (y: number): number => {
+      const norm = yToNorm(y);
       const dir = invertY ? norm : 1 - norm;
       return plotTop + dir * plotH;
-    };
-  }, [yBounds, yScaleMode, invertY, plotTop, plotH]);
+    },
+    [yToNorm, invertY, plotTop, plotH],
+  );
 
   const pixelToY = useMemo(() => {
     const yMinV = yBounds.min;
@@ -189,19 +235,84 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     };
   }, [yBounds, yScaleMode, invertY, plotTop, plotH]);
 
+  // Cached offscreen raster bitmap rebuilt only when heatmap data or color bounds change
+  const offscreenCanvas = useMemo<HTMLCanvasElement | null>(() => {
+    const nTime = timesMs.length;
+    const nY = yValues.length;
+    if (nTime === 0 || nY === 0 || typeof document === "undefined") return null;
+
+    const off = document.createElement("canvas");
+    off.width = nTime;
+    off.height = OFFSCREEN_RASTER_H;
+    const octx = off.getContext("2d");
+    if (!octx) return null;
+
+    const yNorms = yValues.map((y) => yToNorm(y));
+    const rowToYIdx = new Int32Array(OFFSCREEN_RASTER_H);
+    for (let py = 0; py < OFFSCREEN_RASTER_H; py++) {
+      const frac = py / Math.max(1, OFFSCREEN_RASTER_H - 1);
+      const targetNorm = invertY ? frac : 1 - frac;
+      let bestIdx = 0;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (let j = 0; j < nY; j++) {
+        const d = Math.abs(yNorms[j] - targetNorm);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = j;
+        }
+      }
+      rowToYIdx[py] = bestIdx;
+    }
+
+    const imgData = octx.createImageData(nTime, OFFSCREEN_RASTER_H);
+    const pixels = imgData.data;
+    const zRange = Math.max(1e-12, zHigh - zLow);
+
+    for (let py = 0; py < OFFSCREEN_RASTER_H; py++) {
+      const yIdx = rowToYIdx[py];
+      const rowBase = py * nTime * 4;
+      for (let tIdx = 0; tIdx < nTime; tIdx++) {
+        const raw =
+          matrixLayout === "time-by-y"
+            ? (zMatrix[tIdx]?.[yIdx] ?? null)
+            : (zMatrix[yIdx]?.[tIdx] ?? null);
+        const offIdx = rowBase + tIdx * 4;
+        if (raw === null || raw === undefined || !Number.isFinite(raw)) {
+          pixels[offIdx + 3] = 0;
+          continue;
+        }
+        const val = zTransform === "log10" ? (raw > 0 ? Math.log10(raw) : Number.NaN) : raw;
+        if (!Number.isFinite(val)) {
+          pixels[offIdx + 3] = 0;
+          continue;
+        }
+        const norm = Math.min(1, Math.max(0, (val - zLow) / zRange));
+        const cIdx = Math.round(norm * 255) * 3;
+        pixels[offIdx] = lut[cIdx];
+        pixels[offIdx + 1] = lut[cIdx + 1];
+        pixels[offIdx + 2] = lut[cIdx + 2];
+        pixels[offIdx + 3] = 255;
+      }
+    }
+
+    octx.putImageData(imgData, 0, 0);
+    return off;
+  }, [timesMs.length, yValues, zMatrix, matrixLayout, zTransform, zLow, zHigh, lut, yToNorm, invertY]);
+
+  // Fast canvas draw: blits cached offscreen raster + draws crisp vector overlays (no cursor dep!)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.floor(width * dpr));
     canvas.height = Math.max(1, Math.floor(height * dpr));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    // Plot background
     ctx.fillStyle = "#090f1d";
     ctx.fillRect(plotLeft, plotTop, plotW, plotH);
 
@@ -209,60 +320,32 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     const nY = yValues.length;
     const [vStart, vEnd] = effectiveRange;
     const spanMs = Math.max(1, vEnd - vStart);
-
-    const readCell = (tIdx: number, yIdx: number): number | null => {
-      if (matrixLayout === "time-by-y") {
-        return zMatrix[tIdx]?.[yIdx] ?? null;
-      }
-      return zMatrix[yIdx]?.[tIdx] ?? null;
-    };
-
     const dtMs =
       nTime > 1 ? Math.max(1000, (timesMs[nTime - 1] - timesMs[0]) / (nTime - 1)) : 60_000;
-
-    // Precompute Y bin pixel boundaries
-    const yEdges: [number, number][] = new Array(nY);
-    for (let yIdx = 0; yIdx < nY; yIdx++) {
-      const yc = yToPixel(yValues[yIdx]);
-      const yPrev = yIdx > 0 ? yToPixel(yValues[yIdx - 1]) : yc + (yIdx + 1 < nY ? yc - yToPixel(yValues[yIdx + 1]) : 8);
-      const yNext = yIdx + 1 < nY ? yToPixel(yValues[yIdx + 1]) : yc + (yIdx > 0 ? yc - yToPixel(yValues[yIdx - 1]) : -8);
-      const top = Math.min(0.5 * (yc + yPrev), 0.5 * (yc + yNext));
-      const bot = Math.max(0.5 * (yc + yPrev), 0.5 * (yc + yNext));
-      yEdges[yIdx] = [Math.max(plotTop, top), Math.min(plotBottom, bot)];
-    }
 
     ctx.save();
     ctx.beginPath();
     ctx.rect(plotLeft, plotTop, plotW, plotH);
     ctx.clip();
 
-    // Render heatmap cells inside visible range
-    if (nTime > 0 && nY > 0) {
-      const zRange = Math.max(1e-12, zHigh - zLow);
-      for (let tIdx = 0; tIdx < nTime; tIdx++) {
-        const tMs = timesMs[tIdx];
-        if (tMs + 0.5 * dtMs < vStart || tMs - 0.5 * dtMs > vEnd) continue;
-        const x0 = plotLeft + ((tMs - 0.5 * dtMs - vStart) / spanMs) * plotW;
-        const x1 = plotLeft + ((tMs + 0.5 * dtMs - vStart) / spanMs) * plotW;
-        const cellW = Math.max(1, Math.ceil(x1 - x0) + 0.4);
-
-        for (let yIdx = 0; yIdx < nY; yIdx++) {
-          const raw = readCell(tIdx, yIdx);
-          if (raw === null || raw === undefined || !Number.isFinite(raw)) continue;
-          const val = zTransform === "log10" ? (raw > 0 ? Math.log10(raw) : Number.NaN) : raw;
-          if (!Number.isFinite(val)) continue;
-          const norm = Math.min(1, Math.max(0, (val - zLow) / zRange));
-          const cIdx = Math.round(norm * 255);
-          ctx.fillStyle = `rgb(${lut[cIdx * 3]}, ${lut[cIdx * 3 + 1]}, ${lut[cIdx * 3 + 2]})`;
-          const [yTop, yBot] = yEdges[yIdx];
-          ctx.fillRect(x0, yTop, cellW, Math.max(1, yBot - yTop + 0.4));
-        }
+    if (offscreenCanvas && nTime > 0 && nY > 0) {
+      const srcStartMs = timesMs[0] - 0.5 * dtMs;
+      const srcEndMs = timesMs[nTime - 1] + 0.5 * dtMs;
+      const visStart = Math.max(vStart, srcStartMs);
+      const visEnd = Math.min(vEnd, srcEndMs);
+      if (visEnd > visStart) {
+        const totalSrcMs = Math.max(1, srcEndMs - srcStartMs);
+        const sx = ((visStart - srcStartMs) / totalSrcMs) * nTime;
+        const sw = Math.max(0.01, ((visEnd - visStart) / totalSrcMs) * nTime);
+        const dx = plotLeft + ((visStart - vStart) / spanMs) * plotW;
+        const dw = ((visEnd - visStart) / spanMs) * plotW;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(offscreenCanvas, sx, 0, sw, OFFSCREEN_RASTER_H, dx, plotTop, dw, plotH);
       }
     }
 
     // Optional band guide lines
     if (bandGuidesY) {
-      ctx.strokeStyle = "rgba(248, 250, 252, 0.72)";
       ctx.lineWidth = 1;
       ctx.setLineDash([5, 4]);
       for (const guide of bandGuidesY) {
@@ -283,29 +366,33 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       ctx.setLineDash([]);
     }
 
-    // Optional COI shading and boundary curve
+    // Optional COI shading and boundary curve closed per contiguous finite run
     if (coiPeriods && coiPeriods.length === nTime && nTime > 1) {
       const outsideEdgeY = invertY ? plotBottom : plotTop;
       ctx.fillStyle = "rgba(15, 23, 42, 0.58)";
-      ctx.beginPath();
-      let started = false;
-      for (let tIdx = 0; tIdx < nTime; tIdx++) {
-        const p = coiPeriods[tIdx];
-        if (p === null || !Number.isFinite(p)) continue;
-        const x = plotLeft + ((timesMs[tIdx] - vStart) / spanMs) * plotW;
-        const y = Math.min(plotBottom, Math.max(plotTop, yToPixel(p)));
-        if (!started) {
-          ctx.moveTo(x, outsideEdgeY);
-          ctx.lineTo(x, y);
-          started = true;
-        } else {
-          ctx.lineTo(x, y);
+
+      let runStart = -1;
+      for (let tIdx = 0; tIdx <= nTime; tIdx++) {
+        const p = tIdx < nTime ? coiPeriods[tIdx] : null;
+        const ok = p !== null && p !== undefined && Number.isFinite(p);
+        if (ok) {
+          if (runStart === -1) runStart = tIdx;
+        } else if (runStart !== -1) {
+          const firstX = plotLeft + ((timesMs[runStart] - vStart) / spanMs) * plotW;
+          const lastX = plotLeft + ((timesMs[tIdx - 1] - vStart) / spanMs) * plotW;
+          ctx.beginPath();
+          ctx.moveTo(firstX, outsideEdgeY);
+          for (let k = runStart; k < tIdx; k++) {
+            const pk = coiPeriods[k] as number;
+            const xk = plotLeft + ((timesMs[k] - vStart) / spanMs) * plotW;
+            const yk = Math.min(plotBottom, Math.max(plotTop, yToPixel(pk)));
+            ctx.lineTo(xk, yk);
+          }
+          ctx.lineTo(lastX, outsideEdgeY);
+          ctx.closePath();
+          ctx.fill();
+          runStart = -1;
         }
-      }
-      if (started) {
-        ctx.lineTo(plotRight, outsideEdgeY);
-        ctx.closePath();
-        ctx.fill();
       }
 
       ctx.strokeStyle = "rgba(248, 250, 252, 0.92)";
@@ -315,7 +402,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       let strokeOpen = false;
       for (let tIdx = 0; tIdx < nTime; tIdx++) {
         const p = coiPeriods[tIdx];
-        if (p === null || !Number.isFinite(p)) {
+        if (p === null || p === undefined || !Number.isFinite(p)) {
           strokeOpen = false;
           continue;
         }
@@ -332,7 +419,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       ctx.setLineDash([]);
     }
 
-    // Optional 95% Monte Carlo significance contours
+    // Optional 95% Monte Carlo significance contours (geometric interpolation when yScaleMode='log')
     if (contourSegments.length > 0 && nTime > 1 && nY > 1) {
       ctx.strokeStyle = "#f8fafc";
       ctx.lineWidth = 1.5;
@@ -348,7 +435,12 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
         const j0 = Math.min(nY - 1, Math.max(0, Math.floor(sF)));
         const j1 = Math.min(nY - 1, j0 + 1);
         const frac = sF - j0;
-        const yVal = yValues[j0] + frac * (yValues[j1] - yValues[j0]);
+        const y0 = yValues[j0];
+        const y1 = yValues[j1];
+        const yVal =
+          yScaleMode === "log" && y0 > 0 && y1 > 0
+            ? y0 * Math.pow(y1 / y0, frac)
+            : y0 + frac * (y1 - y0);
         return yToPixel(yVal);
       };
       for (const [[t0, s0], [t1, s1]] of contourSegments) {
@@ -389,7 +481,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
           ctx.lineTo(xEnd, yEnd);
           ctx.stroke();
 
-          // Small arrowhead
           const angle = Math.atan2(yEnd - yStart, xEnd - xStart);
           ctx.beginPath();
           ctx.moveTo(xEnd, yEnd);
@@ -405,19 +496,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
           ctx.fill();
         }
       }
-    }
-
-    // Active UTC cursor line
-    if (cursorUtcMs !== null && cursorUtcMs >= vStart && cursorUtcMs <= vEnd) {
-      const cx = plotLeft + ((cursorUtcMs - vStart) / spanMs) * plotW;
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.92)";
-      ctx.lineWidth = 1.25;
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      ctx.moveTo(cx, plotTop);
-      ctx.lineTo(cx, plotBottom);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
 
     ctx.restore();
@@ -503,6 +581,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     plotH,
     timesMs,
     yValues,
+    offscreenCanvas,
     zMatrix,
     matrixLayout,
     zTransform,
@@ -511,7 +590,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     zUnit,
     lut,
     effectiveRange,
-    cursorUtcMs,
+    yScaleMode,
     yToPixel,
     pixelToY,
     yFormat,
@@ -522,22 +601,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     contourSegments,
     phaseVectors,
   ]);
-
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (plotW <= 0) return;
-    e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const frac = Math.min(1, Math.max(0, (x - plotLeft) / plotW));
-    const [s, en] = effectiveRange;
-    const span = en - s;
-    const factor = e.deltaY > 0 ? 1.25 : 0.8;
-    const anchor = s + frac * span;
-    const nextSpan = Math.max(MIN_ZOOM_SPAN_MS, span * factor);
-    const nextS = anchor - frac * nextSpan;
-    const nextE = nextS + nextSpan;
-    onViewRangeChange([nextS, nextE]);
-  };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -577,7 +640,13 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
 
     const [vStart, vEnd] = effectiveRange;
     const utcMs = vStart + ((x - plotLeft) / plotW) * (vEnd - vStart);
-    onCursorChange?.(utcMs);
+    if (onCursorChange) {
+      const now = performance.now();
+      if (now - lastCursorEmitRef.current >= 45) {
+        lastCursorEmitRef.current = now;
+        onCursorChange(utcMs);
+      }
+    }
 
     const yVal = pixelToY(y);
     let nearestT = 0;
@@ -625,12 +694,13 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     dragRef.current = null;
   };
 
+  const cursorFrac = computeCursorOverlayPercent(cursorUtcMs, effectiveRange);
+
   return (
     <div
-      ref={wrapRef}
+      ref={setWrapEl}
       className="heatmap-wrapper"
       style={{ height }}
-      onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -640,6 +710,19 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       }}
     >
       <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+      {cursorFrac !== null && (
+        <div
+          style={{
+            position: "absolute",
+            top: plotTop,
+            height: plotH,
+            left: `calc(${CHART_GRID_LEFT}px + ${cursorFrac} * (100% - ${CHART_GRID_LEFT + CHART_GRID_RIGHT}px))`,
+            width: 1,
+            borderLeft: "1px dashed rgba(56, 189, 248, 0.9)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
       {hoverInfo && (
         <div className="heatmap-tooltip mono" style={{ left: hoverInfo.xPx, top: hoverInfo.yPx }}>
           <div>{formatUtcFull(hoverInfo.utcMs)}</div>

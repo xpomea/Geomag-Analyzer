@@ -26,7 +26,7 @@ from geomag_core import (
     load_wtc_cache,
 )
 
-from .data_store import NotFoundError
+from .data_store import NotFoundError, resolve_component_index
 from .deps import AuthDep, CacheDep, JobManagerDep, SettingsDep, StoreDep
 from .jobs import TERMINAL_JOB_STATUSES, JobManager
 from .schemas import CacheEntryOut, JobStatusResponse, WTCJobRequest, WTCResultResponse
@@ -34,17 +34,6 @@ from .security import AuthState, verify_ws_or_sse_auth
 from .serializers import timestamps_to_iso, to_json_list
 
 router = APIRouter(tags=["jobs"])
-
-
-def _comp_idx(component: str) -> int:
-    key = component.strip().upper()
-    if key in ("X", "XM"):
-        return 0
-    if key in ("Y", "YM"):
-        return 1
-    if key == "Z":
-        return 2
-    raise ValueError(f"Unsupported component {component!r}")
 
 
 @router.post("/api/jobs/wtc", response_model=JobStatusResponse)
@@ -55,6 +44,7 @@ def submit_wtc_job(
     job_manager: JobManagerDep,
 ) -> JobStatusResponse:
     """Submit a Tier 3 XWT/WTC + AR(1) Monte Carlo job or return instant cache hit."""
+    canon_frame, c_idx = resolve_component_index(req.component, req.coord_frame)
     if req.n_surrogates > settings.max_mc_surrogates:
         raise ValueError(
             f"n_surrogates ({req.n_surrogates}) exceeds configured quota "
@@ -79,12 +69,12 @@ def submit_wtc_job(
     # Validate coordinate frame & baseline D0 guards upfront
     xyz_i, d0_deg_i, canon_frame = store.apply_coord_frame(
         data_i,
-        coord_frame=req.coord_frame,
+        coord_frame=canon_frame,
         external_d0_deg=req.external_d0_deg_i,
     )
     xyz_j, d0_deg_j, _ = store.apply_coord_frame(
         data_j,
-        coord_frame=req.coord_frame,
+        coord_frame=canon_frame,
         external_d0_deg=req.external_d0_deg_j,
     )
 
@@ -94,7 +84,6 @@ def submit_wtc_job(
             f"Station(s) {', '.join(missing)} have no magnetometer data in {req.episode_id}."
         )
 
-    c_idx = _comp_idx(req.component)
     joint_valid = np.isfinite(xyz_i[:, c_idx]) & np.isfinite(xyz_j[:, c_idx])
     if not np.any(joint_valid):
         raise ValueError("Station pair has 0 jointly finite samples in selected window.")

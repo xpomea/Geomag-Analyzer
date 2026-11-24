@@ -25,19 +25,46 @@ def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
 
     client, settings = make_test_client(shutdown_callback=_on_shutdown)
 
+    # Health reports can_shutdown
+    h0 = client.get("/api/health")
+    assert h0.status_code == 200 and h0.json()["can_shutdown"] is True
+
     # OpenAPI / Swagger UI must be documented and reachable
     assert client.get("/docs").status_code == 200
     openapi = client.get("/openapi.json")
     assert openapi.status_code == 200
     assert "/api/jobs/wtc" in openapi.json()["paths"]
 
-    # Bad Host or Origin must return 403
+    # Bad Host or Origin (incl. cross-port localhost attack) must return 403
     assert client.get("/api/health", headers={"Host": "evil.example"}).status_code == 403
     assert (
         client.get("/api/health", headers={"Origin": "https://evil.example"}).status_code == 403
     )
+    assert (
+        client.get(
+            "/api/health",
+            headers={"Host": "127.0.0.1:8000", "Origin": "http://localhost:9999"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/health",
+            headers={"Host": "127.0.0.1:8000", "Origin": "http://127.0.0.1:9999"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/health",
+            headers={"Host": "127.0.0.1:8000", "Origin": "http://127.0.0.1:8000"},
+        ).status_code
+        == 200
+    )
 
-    # Unauthenticated mutation without X-Session-Token -> 401
+    # Unauthenticated GET on data/jobs endpoints and mutations must return 401
+    assert client.get("/api/catalog").status_code == 401
+    assert client.get("/api/jobs").status_code == 401
     assert (
         client.post(
             "/api/polarization",
@@ -57,12 +84,13 @@ def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
     boot2 = client.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
     assert boot2.status_code == 401
 
-    # Session cookie now unlocks GET /api/auth/session
+    # Session cookie now unlocks GET /api/auth/session and GET /api/catalog
     sess_res = client.get("/api/auth/session")
     assert sess_res.status_code == 200
     assert sess_res.json()["session_token"] == sess_tok
+    assert client.get("/api/catalog/episodes").status_code == 200
 
-    # Evil Origin on WebSocket must be rejected before accept
+    # Evil Origin / cross-port Origin on WebSocket must be rejected before accept
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(
             "/ws/jobs/nonexistent", headers={"Origin": "https://evil.example"}
@@ -73,6 +101,16 @@ def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
     sd = client.post("/api/shutdown", headers={"X-Session-Token": sess_tok})
     assert sd.status_code == 200
     assert shutdown_called["flag"] is True
+
+    # Headless server without shutdown_callback reports can_shutdown=False and 501
+    c_no_sd, s_no_sd = make_test_client(
+        user_data_dir=settings.user_data_dir / "no_sd",
+    )
+    assert c_no_sd.get("/api/health").json()["can_shutdown"] is False
+    tok2 = c_no_sd.get(f"/api/auth/bootstrap?token={s_no_sd.bootstrap_token}").json()[
+        "session_token"
+    ]
+    assert c_no_sd.post("/api/shutdown", headers={"X-Session-Token": tok2}).status_code == 501
 
 
 def test_wtc_lifecycle_ws_progress_cache_hit_and_sse(api_client):
@@ -240,6 +278,178 @@ def test_wtc_rejects_absent_station_and_baseless_xmy_and_quota(api_client):
     )
     assert r_quota.status_code == 422
 
+    # Component / coord_frame mismatch -> 422
+    assert (
+        client.post(
+            "/api/jobs/wtc",
+            headers=headers,
+            json={
+                "episode_id": "storm_20261004_05",
+                "station_i": "BEL",
+                "station_j": "WNG",
+                "coord_frame": "XYZ",
+                "component": "Xm",
+                "n_surrogates": 10,
+            },
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/jobs/wtc",
+            headers=headers,
+            json={
+                "episode_id": "storm_20261004_05",
+                "station_i": "BEL",
+                "station_j": "WNG",
+                "coord_frame": "XmYm",
+                "component": "X",
+                "n_surrogates": 10,
+            },
+        ).status_code
+        == 422
+    )
+
+
+def test_orphaned_jobs_reconciled_on_startup_and_cancel(tmp_path: Path, make_test_client):
+    from geomag_api.cache import CacheManager, utc_now_iso
+
+    ud = tmp_path / "orphan_ud"
+    sc = tmp_path / "orphan_sc"
+    sc.mkdir(parents=True, exist_ok=True)
+    cm = CacheManager(
+        static_cache_dir=sc,
+        user_cache_dir=ud / "user_cache",
+        runtime_db_path=ud / "runtime.sqlite",
+    )
+    now = utc_now_iso()
+    conn = cm.connect_runtime()
+    try:
+        for jid, st, ck in [
+            ("stale-run", "running", "0" * 64),
+            ("stale-canc", "cancelling", "1" * 64),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    job_id, job_type, cache_key, status, stage, progress_pct,
+                    completed_steps, total_steps, eta_sec, cache_hit, result_path,
+                    error_message, params_json, created_at, updated_at
+                ) VALUES (?, 'cross_wtc', ?, ?, ?, 50.0, 5, 10, 5.0, 0, NULL, NULL, ?, ?, ?)
+                """,
+                (jid, ck, st, st, '{"n_surrogates": 10}', now, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client, settings = make_test_client(user_data_dir=ud, static_cache_dir=sc)
+    tok = client.get(
+        f"/api/auth/bootstrap?token={settings.bootstrap_token}"
+    ).json()["session_token"]
+    hdrs = {"X-Session-Token": tok}
+
+    # On startup JobManager reconciled prior queued/running/cancelling jobs to failed
+    for jid in ("stale-run", "stale-canc"):
+        j = client.get(f"/api/jobs/{jid}").json()
+        assert j["status"] == "failed"
+        assert "restart" in j["error_message"].lower()
+
+    # Stale row without in-memory Future -> DELETE cancels immediately
+    conn2 = cm.connect_runtime()
+    try:
+        conn2.execute(
+            """
+            INSERT INTO jobs (
+                job_id, job_type, cache_key, status, stage, progress_pct,
+                completed_steps, total_steps, eta_sec, cache_hit, result_path,
+                error_message, params_json, created_at, updated_at
+            ) VALUES (
+                'orphan-live', 'cross_wtc', ?, 'running', 'mc', 20.0, 2, 10, 4.0,
+                0, NULL, NULL, ?, ?, ?
+            )
+            """,
+            ("2" * 64, '{"n_surrogates": 10}', now, now),
+        )
+        conn2.commit()
+    finally:
+        conn2.close()
+
+    r_del = client.delete("/api/jobs/orphan-live", headers=hdrs)
+    assert r_del.status_code == 200
+    assert r_del.json()["status"] == "cancelled"
+
+    # Orphan with matching cache_key is marked failed and fresh worker starts
+    import geomag_core as gc
+    from geomag_core import build_wtc_cache_key
+
+    ck_77 = build_wtc_cache_key(
+        gc.__version__,
+        episode_id="storm_20261004_05",
+        pair=("BEL", "WNG"),
+        component="X",
+        coord_frame="XYZ",
+        d0_deg=0.0,
+        period_min_sec=120.0,
+        period_max_sec=3600.0,
+        dj=1.0 / 12.0,
+        omega0=6.0,
+        gap_policy="subsegments",
+        n_surrogates=0,
+        alpha=0.05,
+        seed=77,
+        qc_params={
+            "d0_deg_i": 0.0,
+            "d0_deg_j": 0.0,
+            "start_utc": "2026-10-04T00:00:00Z",
+            "end_utc": "2026-10-04T05:59:00Z",
+            "min_subsegment_samples": 120,
+        },
+    )
+    conn3 = cm.connect_runtime()
+    try:
+        conn3.execute(
+            """
+            INSERT INTO jobs (
+                job_id, job_type, cache_key, status, stage, progress_pct,
+                completed_steps, total_steps, eta_sec, cache_hit, result_path,
+                error_message, params_json, created_at, updated_at
+            ) VALUES (
+                'fake-stale-ck', 'cross_wtc', ?, 'queued', 'queued', 0.0, 0, 1,
+                NULL, 0, NULL, NULL, ?, ?, ?
+            )
+            """,
+            (ck_77, '{"n_surrogates": 0}', now, now),
+        )
+        conn3.commit()
+    finally:
+        conn3.close()
+
+    wtc_req = {
+        "episode_id": "storm_20261004_05",
+        "station_i": "BEL",
+        "station_j": "WNG",
+        "component": "X",
+        "coord_frame": "XYZ",
+        "n_surrogates": 0,
+        "seed": 77,
+        "start_utc": "2026-10-04T00:00:00Z",
+        "end_utc": "2026-10-04T05:59:00Z",
+    }
+    sub1 = client.post("/api/jobs/wtc", headers=hdrs, json=wtc_req).json()
+    assert sub1["job_id"] != "fake-stale-ck"
+    stale_after = client.get("/api/jobs/fake-stale-ck").json()
+    assert stale_after["status"] == "failed"
+
+    # Wait briefly for fresh worker to finish cleanly before fixture exit
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        st_sub = client.get(f"/api/jobs/{sub1['job_id']}").json()
+        if st_sub["status"] in ("completed", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+    assert client.get(f"/api/jobs/{sub1['job_id']}").json()["status"] == "completed"
+
 
 @pytest.mark.asyncio
 async def test_async_httpx_transport_and_endpoints(tmp_path: Path):
@@ -260,6 +470,10 @@ async def test_async_httpx_transport_and_endpoints(tmp_path: Path):
             h = await ac.get("/api/health")
             assert h.status_code == 200
             assert h.json()["catalog_stations"] == 50
+
+            assert (await ac.get("/api/catalog/episodes")).status_code == 401
+            boot = await ac.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
+            assert boot.status_code == 200
 
             cat = await ac.get("/api/catalog/episodes")
             assert cat.status_code == 200 and len(cat.json()) == 4

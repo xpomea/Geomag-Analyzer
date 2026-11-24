@@ -42,6 +42,26 @@ from .serializers import timestamps_to_iso, to_json_float, to_json_list
 router = APIRouter(prefix="/api/polarization", tags=["polarization"])
 
 
+def _multitaper_band_dof(
+    freqs_hz: np.ndarray,
+    *,
+    k_tapers: int,
+    nw: float,
+    spectrum_type: str,
+) -> float:
+    """Estimate effective DOF for DPSS multitaper band average (flat vs red spectrum)."""
+    n_b = int(freqs_hz.shape[0])
+    if n_b == 0:
+        return 2.0
+    if spectrum_type == "red":
+        f_safe = np.maximum(np.asarray(freqs_hz, dtype=np.float64), 1e-12)
+        weights = f_safe ** (-2.0)
+        n_b_eff = float(np.sum(weights) ** 2) / max(float(np.sum(weights**2)), 1e-30)
+    else:
+        n_b_eff = float(n_b)
+    return max(2.0, float(k_tapers) * max(1.0, n_b_eff / max(1.0, 2.0 * float(nw))))
+
+
 def _stokes_to_schema(st: Stokes2D) -> Stokes2DOut:
     return Stokes2DOut(
         I=to_json_float(st.I),
@@ -370,7 +390,7 @@ def compute_polarization(
 
     if req.method == "multitaper":
         finite_rows = np.all(np.isfinite(xyz), axis=1)
-        min_seg = max(64, req.window_samples if req.include_dynamic else 64)
+        min_seg = 64
         subsegs = [
             (s, e)
             for s, e in find_valid_subsegments(finite_rows, min_length=min_seg)
@@ -403,7 +423,12 @@ def compute_polarization(
             )
             s_mats.append(mt.S)
             w_lens.append(float(e_idx - s_idx))
-            dof_sum += float(mt.K_tapers) * max(1.0, float(mt.N_B) / max(1.0, 2.0 * req.nw))
+            dof_sum += _multitaper_band_dof(
+                mt.freqs_hz,
+                k_tapers=mt.K_tapers,
+                nw=req.nw,
+                spectrum_type=req.spectrum_type,
+            )
 
         s_overall = aggregate_spectral_matrices(s_mats, weights=w_lens)
         n_eff_mt = max(2.0, dof_sum)
@@ -446,10 +471,11 @@ def compute_polarization(
                             f_min_hz=req.f_min_hz,
                             f_max_hz=req.f_max_hz,
                         )
-                        nw_mt = max(
-                            2.0,
-                            float(mt_w.K_tapers)
-                            * max(1.0, float(mt_w.N_B) / max(1.0, 2.0 * req.nw)),
+                        nw_mt = _multitaper_band_dof(
+                            mt_w.freqs_hz,
+                            k_tapers=mt_w.K_tapers,
+                            nw=req.nw,
+                            spectrum_type=req.spectrum_type,
                         )
                         st_w = stokes_from_spectral_matrix_2d(
                             mt_w.S, n_eff=nw_mt, alpha=req.alpha
@@ -595,11 +621,12 @@ def compute_polarization(
             )
             g2crit_vals, neff_vals = [], []
             sig_flags, valid_flags = [], []
+            min_win_os = (req.window_samples - 1) * vb.oversample_m + 1
             for s in starts:
                 os_s = s * vb.oversample_m
-                os_e = os_s + w_len_os
+                os_e = min(os_s + w_len_os, vb.usable_mask.shape[0])
                 ok = bool(
-                    os_e <= vb.usable_mask.shape[0]
+                    (os_e - os_s) >= min_win_os
                     and np.all(vb.usable_mask[os_s:os_e])
                     and is_window_valid(data.is_valid_xyz[s : s + req.window_samples])
                 )

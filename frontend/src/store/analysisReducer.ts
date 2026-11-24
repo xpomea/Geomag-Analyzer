@@ -40,6 +40,7 @@ export interface AnalysisState {
   method: PolarizationMethod;
   coordFrame: CoordFrame;
   externalD0Deg: number | null;
+  externalD0DegB: number | null;
 
   L: number;
   M: number;
@@ -64,6 +65,7 @@ export interface AnalysisState {
 
   crossComponent: CrossComponent;
   activeCrossTab: CrossPanelTab;
+  wtcStride: number;
 
   jobs: JobStatusResponse[];
   activeWtcJobId: string | null;
@@ -84,6 +86,7 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
   method: "welch",
   coordFrame: "XYZ",
   externalD0Deg: null,
+  externalD0DegB: null,
 
   L: 128,
   M: 64,
@@ -107,6 +110,7 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
 
   crossComponent: "X",
   activeCrossTab: "spectrogram",
+  wtcStride: 2,
 
   jobs: [],
   activeWtcJobId: null,
@@ -127,6 +131,7 @@ export type AnalysisAction =
   | { type: "SET_METHOD"; method: PolarizationMethod }
   | { type: "SET_COORD_FRAME"; coordFrame: CoordFrame }
   | { type: "SET_EXTERNAL_D0"; d0Deg: number | null }
+  | { type: "SET_EXTERNAL_D0_B"; d0Deg: number | null }
   | { type: "SET_WELCH_PARAMS"; L?: number; M?: number; windowSamples?: number; stepSamples?: number }
   | { type: "SET_NW"; nw: number }
   | { type: "SET_SPECTRUM_TYPE"; spectrumType: SpectrumType }
@@ -142,6 +147,17 @@ export type AnalysisAction =
   | { type: "SET_SHOW_NOISE_GHOST"; show: boolean }
   | { type: "SET_CROSS_COMPONENT"; component: CrossComponent }
   | { type: "SET_ACTIVE_CROSS_TAB"; tab: CrossPanelTab }
+  | { type: "SET_WTC_STRIDE"; stride: number }
+  | {
+      type: "OPEN_WTC_JOB";
+      jobId: string;
+      episodeId: string;
+      stationA: string;
+      stationB: string;
+      component: CrossComponent;
+      coordFrame: CoordFrame;
+      boundsMs?: [number, number] | null;
+    }
   | { type: "SET_JOBS"; jobs: JobStatusResponse[] }
   | { type: "UPSERT_JOB"; job: JobStatusResponse }
   | { type: "SET_ACTIVE_WTC_JOB"; jobId: string | null }
@@ -262,14 +278,22 @@ export function analysisReducer(
     case "SET_EXTERNAL_D0":
       return { ...state, externalD0Deg: action.d0Deg };
 
-    case "SET_WELCH_PARAMS":
+    case "SET_EXTERNAL_D0_B":
+      return { ...state, externalD0DegB: action.d0Deg };
+
+    case "SET_WELCH_PARAMS": {
+      const nextL = Math.max(16, action.L ?? state.L);
+      const rawM = action.M ?? state.M;
+      const nextM = Math.max(1, Math.min(rawM, Math.max(1, nextL - 1)));
+      const nextWin = Math.max(nextL, action.windowSamples ?? state.windowSamples);
       return {
         ...state,
-        L: action.L ?? state.L,
-        M: action.M ?? state.M,
-        windowSamples: action.windowSamples ?? state.windowSamples,
-        stepSamples: action.stepSamples ?? state.stepSamples,
+        L: nextL,
+        M: nextM,
+        windowSamples: nextWin,
+        stepSamples: Math.max(1, action.stepSamples ?? state.stepSamples),
       };
+    }
 
     case "SET_NW":
       return { ...state, nw: Math.max(1.0, action.nw) };
@@ -325,6 +349,33 @@ export function analysisReducer(
 
     case "SET_ACTIVE_CROSS_TAB":
       return { ...state, activeCrossTab: action.tab };
+
+    case "SET_WTC_STRIDE":
+      return { ...state, wtcStride: Math.max(1, Math.round(action.stride)) };
+
+    case "OPEN_WTC_JOB": {
+      const switchedEpisode = action.episodeId !== state.episodeId;
+      const nextRange =
+        action.boundsMs ?? (switchedEpisode ? null : state.viewRangeMs);
+      const nextCursor =
+        action.boundsMs
+          ? Math.round(0.5 * (action.boundsMs[0] + action.boundsMs[1]))
+          : switchedEpisode
+            ? null
+            : state.cursorUtcMs;
+      return {
+        ...state,
+        episodeId: action.episodeId,
+        stationA: action.stationA.toUpperCase(),
+        stationB: action.stationB.toUpperCase(),
+        coordFrame: action.coordFrame,
+        crossComponent: harmonizeCrossComponent(action.component, action.coordFrame),
+        viewRangeMs: nextRange,
+        cursorUtcMs: nextCursor,
+        activeWtcJobId: action.jobId,
+        activeCrossTab: "wtc",
+      };
+    }
 
     case "SET_JOBS":
       return { ...state, jobs: action.jobs };

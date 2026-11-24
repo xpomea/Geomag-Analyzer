@@ -40,6 +40,29 @@ class JobManager:
         self._futures: dict[str, Future[dict[str, Any]]] = {}
         self._cancel_events: dict[str, Any] = {}
         self._subscribers: dict[str, set[Subscriber]] = {}
+        self._reconcile_orphaned_jobs()
+
+    def _reconcile_orphaned_jobs(self) -> None:
+        """Mark stale non-terminal jobs left from a prior crashed/restarted server as failed."""
+        now = utc_now_iso()
+        with self._lock:
+            conn = self.cache.connect_runtime()
+            try:
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'failed',
+                        stage = 'failed',
+                        eta_sec = NULL,
+                        error_message = 'Interrupted by server restart',
+                        updated_at = ?
+                    WHERE status IN ('queued', 'running', 'cancelling')
+                    """,
+                    (now,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
     def _ensure_pool(self) -> None:
         with self._lock:
@@ -258,6 +281,7 @@ class JobManager:
             )
 
         with self._lock:
+            now = utc_now_iso()
             conn = self.cache.connect_runtime()
             try:
                 existing = conn.execute(
@@ -266,7 +290,22 @@ class JobManager:
                     (cache_key,),
                 ).fetchone()
                 if existing is not None:
-                    return self._row_to_dict(existing)
+                    existing_id = str(existing["job_id"])
+                    if existing_id in self._futures:
+                        return self._row_to_dict(existing)
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'failed',
+                            stage = 'failed',
+                            eta_sec = NULL,
+                            error_message = 'Orphaned job reconciled',
+                            updated_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (now, existing_id),
+                    )
+                    conn.commit()
 
                 active_count = len(self._futures)
                 if active_count >= self.settings.max_active_jobs:
@@ -417,14 +456,14 @@ class JobManager:
             if ev is not None:
                 ev.set()
             fut = self._futures.get(job_id)
-            cancelled_before_start = bool(fut is not None and fut.cancel())
+            cancelled_immediately = fut is None or bool(fut.cancel())
 
             conn = self.cache.connect_runtime()
             try:
-                if cancelled_before_start:
+                if cancelled_immediately:
                     conn.execute(
                         "UPDATE jobs SET status = 'cancelled', stage = 'cancelled', "
-                        "updated_at = ? WHERE job_id = ?",
+                        "eta_sec = NULL, updated_at = ? WHERE job_id = ?",
                         (now, job_id),
                     )
                 else:

@@ -140,7 +140,7 @@ describe("client dynamic alpha masking (p < p_crit & gamma2 < gamma2_crit)", () 
       phase_deg_tf: ts.map(() => Array.from({ length: nFreq }, (_, f) => -90 + f * 4)),
       phase_deg_tf_masked: [],
       azimuthal: {
-        m: Array(nWin).fill(2.5),
+        m: Array(nWin).fill(4.5),
         m_alias: 18,
         delta_lon_deg: 10,
         is_meridional_guarded: false,
@@ -158,7 +158,7 @@ describe("client dynamic alpha masking (p < p_crit & gamma2 < gamma2_crit)", () 
     // Window with gamma2=0.08 is significant at 0.05 but masked at 0.01
     expect(res05.isSignificant[0]).toBe(true);
     expect(res05.phaseDegMasked[0]).toBe(45);
-    expect(res05.azimuthalMMasked[0]).toBe(2.5);
+    expect(res05.azimuthalMMasked[0]).toBeCloseTo(4.5, 6);
 
     expect(res01.isSignificant[0]).toBe(false);
     expect(res01.phaseDegMasked[0]).toBeNull();
@@ -170,5 +170,61 @@ describe("client dynamic alpha masking (p < p_crit & gamma2 < gamma2_crit)", () 
     expect(res05.phaseDegTfMasked[0][20]).toBe(-90 + 20 * 4); // 0.70 > 0.6316
     expect(res01.phaseDegTfMasked[0][20]).toBeNull(); // 0.70 < 0.7846
     expect(res01.phaseDegTfMasked[0][35]).toBe(-90 + 35 * 4); // 0.85 > 0.7846
+  });
+
+  it("reveals and unwraps azimuthal m when relaxing alpha to 0.10 even when backend m was null at 0.05", () => {
+    const nWin = 3;
+    const nEff = 45; // gamma2Crit(45, 0.05) ~ 0.0658, gamma2Crit(45, 0.10) ~ 0.0510
+    const ts = [
+      "2026-10-10T01:00:00Z",
+      "2026-10-10T02:00:00Z",
+      "2026-10-10T03:00:00Z",
+    ];
+    const welch: WelchPairResponse = {
+      episode_id: "storm_20261009_11",
+      station_i: "LVV",
+      station_j: "OTT",
+      component: "X",
+      coord_frame: "XYZ",
+      band: "Pc5",
+      available: true,
+      cache_hits: { LVV: true, OTT: true },
+      window_timestamps_utc: ts,
+      freqs_hz: [],
+      K_ij: [4, 4, 4],
+      n_eff: [nEff, nEff, nEff],
+      // Window 0 (0.060) fails alpha=0.05 but passes alpha=0.10
+      gamma2: [0.06, 0.2, 0.25],
+      gamma2_crit: Array(nWin).fill(gamma2Crit(nEff, 0.05)),
+      phase_deg: [170, -170, -150],
+      phase_deg_masked: [null, -170, -150],
+      is_significant: [false, true, true],
+      is_valid: [true, true, true],
+      gamma2_tf: [],
+      gamma2_crit_tf: [],
+      phase_deg_tf: [],
+      phase_deg_tf_masked: [],
+      azimuthal: {
+        // Backend nulled index 0 at alpha=0.05; client recomputes from phase_deg!
+        m: [null, -17, -15],
+        m_alias: 18,
+        delta_lon_deg: 10,
+        is_meridional_guarded: false,
+      },
+      warnings: [],
+    };
+
+    const at05 = applyWelchAlphaMask(welch, 0.05, 0.05);
+    expect(at05.azimuthalMMasked[0]).toBeNull();
+    expect(at05.azimuthalMMasked[1]).toBeCloseTo(-17, 6);
+    expect(at05.azimuthalMMasked[2]).toBeCloseTo(-15, 6);
+
+    const at10 = applyWelchAlphaMask(welch, 0.1, 0.05);
+    // All 3 windows significant -> 170 deg unwrapped across +/-180 -> 170, 190, 210 deg => m = 17, 19, 21
+    expect(at10.isSignificant).toEqual([true, true, true]);
+    expect(at10.phaseDegMasked[0]).toBe(170);
+    expect(at10.azimuthalMMasked[0]).toBeCloseTo(17, 6);
+    expect(at10.azimuthalMMasked[1]).toBeCloseTo(19, 6);
+    expect(at10.azimuthalMMasked[2]).toBeCloseTo(21, 6);
   });
 });

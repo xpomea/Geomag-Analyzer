@@ -8,6 +8,7 @@ export const JobMonitorPanel: React.FC = () => {
   const {
     state,
     dispatch,
+    health,
     refreshJobsAndCache,
     cancelWtcJob,
     openWtcJobResult,
@@ -203,11 +204,20 @@ export const JobMonitorPanel: React.FC = () => {
             <button
               type="button"
               className="btn btn-danger"
-              disabled={state.serverStatus !== "running"}
+              disabled={state.serverStatus !== "running" || health?.can_shutdown === false}
+              title={
+                health?.can_shutdown === false
+                  ? "Остановка сервера доступна только в настольном режиме launcher / --browser"
+                  : "Корректно остановить сервер"
+              }
               onClick={() => void triggerShutdown()}
             >
               <Power size={13} />
-              <span>Остановить сервер</span>
+              <span>
+                {health?.can_shutdown === false
+                  ? "Остановка отключена (веб-режим)"
+                  : "Остановить сервер"}
+              </span>
             </button>
           </section>
         </div>

@@ -34,6 +34,7 @@ export interface HealthResponse {
   catalog_stations: number;
   catalog_episodes: number;
   require_auth: boolean;
+  can_shutdown?: boolean;
 }
 
 export interface BootstrapResponse {

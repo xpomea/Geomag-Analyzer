@@ -205,9 +205,10 @@ export function applyWelchAlphaMask(
   const gamma2CritArr = new Array<number | null>(nWin);
   const isSigArr = new Array<boolean>(nWin);
   const phaseMasked = new Array<number | null>(nWin);
-  const mRaw = resp.azimuthal?.m ?? [];
   const mGuarded = Boolean(resp.azimuthal?.is_meridional_guarded);
-  const mMasked = new Array<number | null>(nWin);
+  const deltaLonDeg = resp.azimuthal?.delta_lon_deg ?? 0;
+  const deltaLonRad = (deltaLonDeg * Math.PI) / 180;
+  const mMasked = new Array<number | null>(nWin).fill(null);
 
   for (let i = 0; i < nWin; i++) {
     const valid = Boolean(resp.is_valid[i]);
@@ -228,7 +229,36 @@ export function applyWelchAlphaMask(
     const sig = Boolean(valid && g2 !== null && gc !== null && g2 > gc);
     isSigArr[i] = sig;
     phaseMasked[i] = sig ? (resp.phase_deg[i] ?? null) : null;
-    mMasked[i] = !mGuarded && sig ? (mRaw[i] ?? null) : null;
+  }
+
+  // Recompute azimuthal wave number m directly from unmasked phase_deg over significant segments
+  if (!mGuarded && Math.abs(deltaLonRad) > 1e-12) {
+    let segStart = -1;
+    for (let i = 0; i <= nWin; i++) {
+      const pDeg = i < nWin ? resp.phase_deg[i] : null;
+      const inSeg =
+        i < nWin && isSigArr[i] && pDeg !== null && pDeg !== undefined && Number.isFinite(pDeg);
+      if (inSeg) {
+        if (segStart === -1) segStart = i;
+      } else if (segStart !== -1) {
+        let prevRaw = ((resp.phase_deg[segStart] as number) * Math.PI) / 180;
+        let prevUnwrapped = prevRaw;
+        mMasked[segStart] = prevUnwrapped / deltaLonRad;
+        for (let k = segStart + 1; k < i; k++) {
+          const curRaw = ((resp.phase_deg[k] as number) * Math.PI) / 180;
+          const rawDiff = curRaw - prevRaw;
+          let wrappedDiff =
+            (((rawDiff + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+          if (wrappedDiff === -Math.PI && rawDiff > 0) {
+            wrappedDiff = Math.PI;
+          }
+          prevUnwrapped += wrappedDiff;
+          prevRaw = curRaw;
+          mMasked[k] = prevUnwrapped / deltaLonRad;
+        }
+        segStart = -1;
+      }
+    }
   }
 
   const gamma2CritTf = resp.gamma2_crit_tf.map((gc0) =>

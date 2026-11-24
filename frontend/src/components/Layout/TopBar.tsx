@@ -65,8 +65,12 @@ export const TopBar: React.FC = () => {
             type="button"
             className="btn btn-danger"
             onClick={() => setConfirmShutdown(true)}
-            disabled={state.serverStatus !== "running"}
-            title="Корректно остановить сервер и пул воркеров (для режима --browser)"
+            disabled={state.serverStatus !== "running" || health?.can_shutdown === false}
+            title={
+              health?.can_shutdown === false
+                ? "Остановка сервера доступна только в настольном режиме launcher / --browser"
+                : "Корректно остановить сервер и пул воркеров (для режима --browser)"
+            }
           >
             <Power size={14} />
             <span>Выход</span>

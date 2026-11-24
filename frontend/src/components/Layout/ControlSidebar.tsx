@@ -9,6 +9,7 @@ import type {
   SpectrumType,
 } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { DraftNumberInput } from "./DraftNumberInput";
 
 const QUICK_PAIRS: { label: string; a: string; b: string }[] = [
   { label: "LVV–BEL", a: "LVV", b: "BEL" },
@@ -227,22 +228,48 @@ export const ControlSidebar: React.FC = () => {
         </div>
 
         {state.coordFrame === "XmYm" && (
-          <label className="field-label">
-            <span>Внешний D0 [°] (опц. для безбазисных)</span>
-            <input
-              type="number"
-              step="0.1"
-              value={state.externalD0Deg ?? ""}
-              placeholder="Авто по спокойным суткам"
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                dispatch({
-                  type: "SET_EXTERNAL_D0",
-                  d0Deg: raw === "" ? null : Number(raw),
-                });
-              }}
-            />
-          </label>
+          <div className="field-row">
+            <label className="field-label">
+              <span>D0 ст. A [°]</span>
+              <input
+                type="number"
+                step="0.1"
+                value={state.externalD0Deg ?? ""}
+                placeholder="Авто"
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (raw === "") {
+                    dispatch({ type: "SET_EXTERNAL_D0", d0Deg: null });
+                    return;
+                  }
+                  const num = Number(raw);
+                  if (Number.isFinite(num)) {
+                    dispatch({ type: "SET_EXTERNAL_D0", d0Deg: num });
+                  }
+                }}
+              />
+            </label>
+            <label className="field-label">
+              <span>D0 ст. B [°]</span>
+              <input
+                type="number"
+                step="0.1"
+                value={state.externalD0DegB ?? ""}
+                placeholder="Авто"
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (raw === "") {
+                    dispatch({ type: "SET_EXTERNAL_D0_B", d0Deg: null });
+                    return;
+                  }
+                  const num = Number(raw);
+                  if (Number.isFinite(num)) {
+                    dispatch({ type: "SET_EXTERNAL_D0_B", d0Deg: num });
+                  }
+                }}
+              />
+            </label>
+          </div>
         )}
 
         {baselineWarning && (
@@ -254,32 +281,32 @@ export const ControlSidebar: React.FC = () => {
         <div className="field-row">
           <label className="field-label">
             <span>Окно стат. [мин]</span>
-            <input
-              type="number"
-              min={60}
+            <DraftNumberInput
+              min={Math.max(60, state.L)}
               max={1440}
               step={30}
+              integer
               value={state.windowSamples}
-              onChange={(e) =>
+              onCommit={(val) =>
                 dispatch({
                   type: "SET_WELCH_PARAMS",
-                  windowSamples: Math.max(state.L, Number(e.target.value) || 360),
+                  windowSamples: val,
                 })
               }
             />
           </label>
           <label className="field-label">
             <span>Шаг [мин]</span>
-            <input
-              type="number"
+            <DraftNumberInput
               min={10}
               max={240}
               step={10}
+              integer
               value={state.stepSamples}
-              onChange={(e) =>
+              onCommit={(val) =>
                 dispatch({
                   type: "SET_WELCH_PARAMS",
-                  stepSamples: Math.max(10, Number(e.target.value) || 30),
+                  stepSamples: val,
                 })
               }
             />
@@ -309,60 +336,130 @@ export const ControlSidebar: React.FC = () => {
                 }
               >
                 <option value={64}>64</option>
-                <option value={128}>128</option>
+                {state.L > 128 && <option value={128}>128</option>}
               </select>
             </label>
+          </div>
+        )}
+
+        {state.band === "Pc6" && state.L * 60 < 4 * state.tMaxPc6Sec && (
+          <div
+            className="hint-text"
+            style={{
+              color: "var(--warn)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+            }}
+          >
+            <span>
+              L·Δt ({state.L * 60} с) &lt; 4·T_max ({4 * state.tMaxPc6Sec} с) (§5.2)
+            </span>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => dispatch({ type: "SET_WELCH_PARAMS", L: 256 })}
+            >
+              L = 256
+            </button>
           </div>
         )}
 
         {state.method === "multitaper" && (
           <label className="field-label">
             <span>Параметр полосы NW</span>
-            <input
-              type="number"
+            <DraftNumberInput
               min={1.5}
               max={6.0}
               step={0.5}
               value={state.nw}
-              onChange={(e) => dispatch({ type: "SET_NW", nw: Number(e.target.value) || 2.5 })}
+              onCommit={(val) => dispatch({ type: "SET_NW", nw: val })}
             />
           </label>
         )}
 
         {isVariantB && (
-          <div className="field-row">
-            <label className="field-label">
-              <span>Оверсэмпл m</span>
-              <select
-                value={state.oversampleM}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_VARIANT_B_PARAMS",
-                    oversampleM: Number(e.target.value),
-                  })
-                }
-              >
-                <option value={1}>m = 1</option>
-                <option value={4}>m = 4 (рек.)</option>
-                <option value={8}>m = 8</option>
-              </select>
-            </label>
-            <label className="field-label">
-              <span>Метод m</span>
-              <select
-                value={state.oversampleMethod}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_VARIANT_B_PARAMS",
-                    oversampleMethod: e.target.value as OversampleMethod,
-                  })
-                }
-              >
-                <option value="fourier">Fourier</option>
-                <option value="kaiser">Kaiser FIR</option>
-              </select>
-            </label>
-          </div>
+          <>
+            <div className="field-row">
+              <label className="field-label">
+                <span>Оверсэмпл m</span>
+                <select
+                  value={state.oversampleM}
+                  onChange={(e) =>
+                    dispatch({
+                      type: "SET_VARIANT_B_PARAMS",
+                      oversampleM: Number(e.target.value),
+                    })
+                  }
+                >
+                  <option value={1}>m = 1</option>
+                  <option value={4}>m = 4 (рек.)</option>
+                  <option value={8}>m = 8</option>
+                </select>
+              </label>
+              <label className="field-label">
+                <span>Метод m</span>
+                <select
+                  value={state.oversampleMethod}
+                  onChange={(e) =>
+                    dispatch({
+                      type: "SET_VARIANT_B_PARAMS",
+                      oversampleMethod: e.target.value as OversampleMethod,
+                    })
+                  }
+                >
+                  <option value="fourier">Fourier</option>
+                  <option value="kaiser">Kaiser FIR</option>
+                </select>
+              </label>
+            </div>
+
+            {state.method === "variant_b_sos" && (
+              <label className="field-label">
+                <span>Порядок Баттерворта n</span>
+                <select
+                  value={state.orderN}
+                  onChange={(e) =>
+                    dispatch({
+                      type: "SET_VARIANT_B_PARAMS",
+                      orderN: Number(e.target.value),
+                    })
+                  }
+                >
+                  <option value={2}>n = 2</option>
+                  <option value={3}>n = 3 (рек., Табл. 11)</option>
+                  <option value={4}>n = 4</option>
+                </select>
+              </label>
+            )}
+
+            {state.method === "variant_b_sos" &&
+              state.band === "Pc5" &&
+              state.oversampleM < 4 && (
+                <div
+                  className="hint-text"
+                  style={{
+                    color: "var(--warn)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 6,
+                  }}
+                >
+                  <span>Для Pc5 SOS по Табл. 9 требуется m ≥ 4</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() =>
+                      dispatch({ type: "SET_VARIANT_B_PARAMS", oversampleM: 4 })
+                    }
+                  >
+                    m = 4
+                  </button>
+                </div>
+              )}
+          </>
         )}
       </section>
 

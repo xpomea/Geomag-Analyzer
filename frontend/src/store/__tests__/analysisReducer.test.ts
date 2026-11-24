@@ -142,4 +142,36 @@ describe("analysisReducer & state guards", () => {
     expect(s2.jobs).toHaveLength(1);
     expect(s2.jobs[0].status).toBe("completed");
   });
+
+  it("handles OPEN_WTC_JOB cross-episode switch, SET_WTC_STRIDE, SET_EXTERNAL_D0_B, and windowSamples >= L guard", () => {
+    const b0 = Date.parse(SAMPLE_EPISODE.start_utc);
+    const b1 = Date.parse(SAMPLE_EPISODE.end_utc);
+    const opened = analysisReducer(INITIAL_ANALYSIS_STATE, {
+      type: "OPEN_WTC_JOB",
+      jobId: "wtc-old",
+      episodeId: SAMPLE_EPISODE.episode_id,
+      stationA: "bel",
+      stationB: "wng",
+      component: "Ym",
+      coordFrame: "XmYm",
+      boundsMs: [b0, b1],
+    });
+    expect(opened.episodeId).toBe(SAMPLE_EPISODE.episode_id);
+    expect(opened.stationA).toBe("BEL");
+    expect(opened.stationB).toBe("WNG");
+    expect(opened.crossComponent).toBe("Ym");
+    expect(opened.activeCrossTab).toBe("wtc");
+    expect(opened.activeWtcJobId).toBe("wtc-old");
+    expect(opened.viewRangeMs).toEqual([b0, b1]);
+
+    const strided = analysisReducer(opened, { type: "SET_WTC_STRIDE", stride: 4 });
+    expect(strided.wtcStride).toBe(4);
+
+    const d0b = analysisReducer(strided, { type: "SET_EXTERNAL_D0_B", d0Deg: 4.5 });
+    expect(d0b.externalD0DegB).toBe(4.5);
+
+    const smallWin = analysisReducer(d0b, { type: "SET_WELCH_PARAMS", L: 256, windowSamples: 128 });
+    expect(smallWin.L).toBe(256);
+    expect(smallWin.windowSamples).toBe(256);
+  });
 });

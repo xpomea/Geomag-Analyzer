@@ -13,6 +13,7 @@ class HealthResponse(BaseModel):
     catalog_stations: int
     catalog_episodes: int
     require_auth: bool
+    can_shutdown: bool = False
 
 
 class BootstrapResponse(BaseModel):
