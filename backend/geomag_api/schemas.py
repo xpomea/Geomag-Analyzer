@@ -310,6 +310,7 @@ class WelchPairRequest(BaseModel):
     alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     min_common_segments: int = Field(default=2, ge=1)
     spectrum_type: Literal["flat", "red"] = "flat"
+    window_index: int | None = Field(default=None, ge=0)
     min_delta_lon_deg: float = Field(default=3.0, ge=0.0)
     unwrap_time: bool = True
 
@@ -362,6 +363,7 @@ class WelchMatrixRequest(BaseModel):
     alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     min_common_segments: int = Field(default=2, ge=1)
     spectrum_type: Literal["flat", "red"] = "flat"
+    window_index: int | None = Field(default=None, ge=0)
 
 
 class WelchMatrixResponse(BaseModel):
@@ -395,6 +397,7 @@ class MeridionalFLRRequest(BaseModel):
     window_index: int = Field(default=0, ge=0)
     alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     min_common_segments: int = Field(default=2, ge=1)
+    spectrum_type: Literal["flat", "red"] = "flat"
 
 
 class MeridionalFLRResponse(BaseModel):

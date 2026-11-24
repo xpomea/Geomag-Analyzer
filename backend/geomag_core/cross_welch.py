@@ -474,6 +474,7 @@ def compute_welch_cross_matrix(
     min_common_segments: int = 2,
     spectrum_type: str = "flat",
     time_chunk_size: int = 32,
+    window_index: int | None = None,
 ) -> WelchMatrixResult:
     """Compute S x S all-pairs dynamic Welch matrix via chunked BLAS GEMM with joint masks."""
     if not spectra_list:
@@ -497,25 +498,44 @@ def compute_welch_cross_matrix(
     t_w, k_seg, _ = ref.F.shape
     station_codes = tuple(sp.station_iaga for sp in spectra_list)
 
-    gamma2_out = np.full((t_w, n_st, n_st), np.nan, dtype=np.float64)
-    gamma2_crit_out = np.full((t_w, n_st, n_st), np.nan, dtype=np.float64)
-    phase_deg_out = np.full((t_w, n_st, n_st), np.nan, dtype=np.float64)
-    phase_masked_out = np.full((t_w, n_st, n_st), np.nan, dtype=np.float64)
-    k_ij_out = np.zeros((t_w, n_st, n_st), dtype=np.int64)
-    n_eff_out = np.full((t_w, n_st, n_st), np.nan, dtype=np.float64)
-    sig_out = np.zeros((t_w, n_st, n_st), dtype=bool)
+    if window_index is not None:
+        win_idx = int(window_index)
+        if win_idx < 0 or win_idx >= t_w:
+            raise ValueError(f"window_index ({win_idx}) out of bounds [0, {t_w - 1}].")
+        t_start_idx = win_idx
+        t_end_idx = win_idx + 1
+        t_out = 1
+        win_centers = ref.window_center_indices[win_idx : win_idx + 1]
+    else:
+        t_start_idx = 0
+        t_end_idx = t_w
+        t_out = t_w
+        win_centers = ref.window_center_indices
+
+    gamma2_out = np.full((t_out, n_st, n_st), np.nan, dtype=np.float64)
+    gamma2_crit_out = np.full((t_out, n_st, n_st), np.nan, dtype=np.float64)
+    phase_deg_out = np.full((t_out, n_st, n_st), np.nan, dtype=np.float64)
+    phase_masked_out = np.full((t_out, n_st, n_st), np.nan, dtype=np.float64)
+    k_ij_out = np.zeros((t_out, n_st, n_st), dtype=np.int64)
+    n_eff_out = np.full((t_out, n_st, n_st), np.nan, dtype=np.float64)
+    sig_out = np.zeros((t_out, n_st, n_st), dtype=bool)
 
     chunk = max(1, int(time_chunk_size))
-    for t0 in range(0, t_w, chunk):
-        t1 = min(t_w, t0 + chunk)
-        c_len = t1 - t0
+    for out_t0 in range(0, t_out, chunk):
+        src_t0 = t_start_idx + out_t0
+        src_t1 = min(t_end_idx, src_t0 + chunk)
+        c_len = src_t1 - src_t0
+        out_t1 = out_t0 + c_len
 
         # Stack chunk across stations: (c_len, S, K, N_B)
         f_chunk = np.stack(
-            [sp.F[t0:t1, :, f_mask].astype(np.complex128, copy=False) for sp in spectra_list],
+            [
+                sp.F[src_t0:src_t1, :, f_mask].astype(np.complex128, copy=False)
+                for sp in spectra_list
+            ],
             axis=1,
         )
-        v_chunk = np.stack([sp.valid_segments[t0:t1, :] for sp in spectra_list], axis=1)
+        v_chunk = np.stack([sp.valid_segments[src_t0:src_t1, :] for sp in spectra_list], axis=1)
         # Ensure masked entries are strictly zero so joint sums need no explicit 3D mask
         f_chunk = np.where(v_chunk[:, :, :, None], f_chunk, 0.0)
 
@@ -555,18 +575,18 @@ def compute_welch_cross_matrix(
         ph_deg = np.where(valid_mat, np.rad2deg(np.angle(s_ij_num)), np.nan)
         sig = good & np.isfinite(g2_crit) & (g2 > g2_crit)
 
-        gamma2_out[t0:t1] = g2
-        gamma2_crit_out[t0:t1] = g2_crit
-        phase_deg_out[t0:t1] = ph_deg
-        phase_masked_out[t0:t1] = np.where(sig, ph_deg, np.nan)
-        k_ij_out[t0:t1] = k_mat
-        n_eff_out[t0:t1] = n_eff
-        sig_out[t0:t1] = sig
+        gamma2_out[out_t0:out_t1] = g2
+        gamma2_crit_out[out_t0:out_t1] = g2_crit
+        phase_deg_out[out_t0:out_t1] = ph_deg
+        phase_masked_out[out_t0:out_t1] = np.where(sig, ph_deg, np.nan)
+        k_ij_out[out_t0:out_t1] = k_mat
+        n_eff_out[out_t0:out_t1] = n_eff
+        sig_out[out_t0:out_t1] = sig
 
     return WelchMatrixResult(
         station_codes=station_codes,
         band=band,
-        window_center_indices=ref.window_center_indices,
+        window_center_indices=win_centers,
         gamma2=gamma2_out,
         gamma2_crit=gamma2_crit_out,
         phase_deg=phase_deg_out,
@@ -650,6 +670,7 @@ def compute_meridional_flr_profile(
     alpha: float = 0.05,
     min_common_segments: int = 2,
     t_max_pc6_sec: float = 1800.0,
+    spectrum_type: str = "flat",
 ) -> MeridionalFLRProfile:
     """Compute latitudinal FLR amplitude and phase gradient profile along a station chain."""
     if len(spectra_chain) < 2:
@@ -688,6 +709,7 @@ def compute_meridional_flr_profile(
             t_max_pc6_sec=t_max_pc6_sec,
             alpha=alpha,
             min_common_segments=min_common_segments,
+            spectrum_type=spectrum_type,
         )
         pair_coh[i] = float(pair_res.gamma2[window_index])
         pair_crit[i] = float(pair_res.gamma2_crit[window_index])

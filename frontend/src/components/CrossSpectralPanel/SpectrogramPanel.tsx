@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { ScientificHeatmap2D, type BandGuide } from "../SyncedCharts/ScientificHeatmap2D";
 
 type SpecComponentMode = "total" | "x" | "y";
@@ -7,6 +8,7 @@ type SpecComponentMode = "total" | "x" | "y";
 export const SpectrogramPanel: React.FC = () => {
   const { state, dispatch, polarizationRaw, episodeBoundsMs, loadingPolarization } =
     useAnalysis();
+  const { setCursorUtcMs } = useCursor();
   const [compMode, setCompMode] = useState<SpecComponentMode>("total");
 
   const spec = polarizationRaw?.spectrogram ?? null;
@@ -90,8 +92,7 @@ export const SpectrogramPanel: React.FC = () => {
         onViewRangeChange={(rangeMs) =>
           dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs })
         }
-        cursorUtcMs={state.cursorUtcMs}
-        onCursorChange={(utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs })}
+        onCursorChange={setCursorUtcMs}
         bandGuidesY={bandGuides}
         height={255}
       />

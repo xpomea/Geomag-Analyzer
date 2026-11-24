@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -390,6 +391,176 @@ def welch_effective_dof(
         denom = denom + 2.0 * np.maximum(0.0, k_arr - float(r)) * fr2
     num = (k_arr * tr0) ** 2
     return np.where(k_arr > 0.0, num / np.maximum(denom, 1e-30), 0.0)
+
+
+@lru_cache(maxsize=64)
+def _multitaper_effective_dof_cached(
+    n_samples: int,
+    nw: float,
+    k_tapers: int,
+    dt: float,
+    f_min_hz: float,
+    f_max_hz: float,
+    is_red: bool,
+) -> float:
+    """Compute exact Gram-matrix effective DOF n_eff for Thomson DPSS multitaper."""
+    tapers = dpss(n_samples, NW=nw, Kmax=k_tapers)  # (K_t, N)
+    freqs = np.fft.rfftfreq(n_samples, d=dt)
+    f_mask = (freqs >= f_min_hz * (1.0 - 1e-12)) & (freqs <= f_max_hz * (1.0 + 1e-12))
+    k_bins = np.where(f_mask)[0]
+    n_b = int(k_bins.size)
+    if n_b == 0:
+        raise ValueError(
+            f"No FFT bins in [{f_min_hz}, {f_max_hz}] Hz for N={n_samples}, dt={dt}"
+        )
+
+    if not is_red:
+        mask_full = np.zeros(n_samples, dtype=np.float64)
+        mask_full[k_bins] = 1.0
+        h_b = np.fft.ifft(mask_full) * float(n_samples)
+        h_b_abs2 = h_b.real**2 + h_b.imag**2
+        tr2 = 0.0
+        for q in range(k_tapers):
+            for p in range(q, k_tapers):
+                w_qp = tapers[q] * tapers[p]
+                fw = np.fft.rfft(w_qp)
+                c_qp = np.fft.irfft(fw.real**2 + fw.imag**2, n=n_samples)
+                val = float(np.dot(h_b_abs2, c_qp))
+                tr2 += val if q == p else 2.0 * val
+        tr = float(n_b * k_tapers)
+        return (tr * tr) / max(tr2, 1e-30)
+
+    # Red noise (Brownian motion under OLS linear detrending):
+    # P_det C_BM P_det == P_det C_circ P_det with S_BM[m] = 1 / (4 sin^2(pi f_m dt)).
+    t_c = np.arange(n_samples, dtype=np.float64) - 0.5 * (n_samples - 1.0)
+    u1 = t_c / max(float(np.linalg.norm(t_c)), 1e-30)
+    w_fft = np.fft.fft(tapers, axis=1)
+    u1_fft = np.fft.fft(u1)
+    c_qk = np.fft.fft(tapers * u1[None, :], axis=1)[:, k_bins]
+
+    f_all = np.fft.fftfreq(n_samples, d=dt)
+    s_bm = np.zeros(n_samples, dtype=np.float64)
+    nz = f_all != 0.0
+    s_bm[nz] = 1.0 / (4.0 * np.sin(np.pi * f_all[nz] * dt) ** 2)
+    sqrt_s = np.sqrt(s_bm) / math.sqrt(float(n_samples))
+
+    if n_samples <= 256:
+        m_all = np.arange(1, n_samples, dtype=np.int64)
+        diff_all = (k_bins[:, None] - m_all[None, :]) % n_samples
+        b_full = (
+            w_fft[:, diff_all] - c_qk[:, :, None] * u1_fft[m_all].conj()[None, None, :]
+        ) * sqrt_s[m_all][None, None, :]
+        b_2d = b_full.reshape(k_tapers * n_b, m_all.size)
+        tr_tot = float(np.sum(b_2d.real**2 + b_2d.imag**2))
+        gram = b_2d.conj().T @ b_2d
+        tr2_tot = float(np.sum(gram.real**2 + gram.imag**2))
+        return (tr_tot * tr_tot) / max(tr2_tot, 1e-30)
+
+    m_low_lim = min(n_samples // 4, 64)
+    low_mask = np.zeros(n_samples, dtype=bool)
+    low_mask[1 : m_low_lim + 1] = True
+    low_mask[n_samples - m_low_lim :] = True
+    m_low = np.where(low_mask)[0]
+
+    diff_low = (k_bins[:, None] - m_low[None, :]) % n_samples
+    b_low = (
+        w_fft[:, diff_low] - c_qk[:, :, None] * u1_fft[m_low].conj()[None, None, :]
+    ) * sqrt_s[m_low][None, None, :]
+    b_low_2d = b_low.reshape(k_tapers * n_b, m_low.size)
+    tr_low = float(np.sum(b_low_2d.real**2 + b_low_2d.imag**2))
+    gram_low = b_low_2d.conj().T @ b_low_2d
+    tr2_low = float(np.sum(gram_low.real**2 + gram_low.imag**2))
+
+    half_sup = int(math.ceil(nw)) + 8
+    m_offs = np.arange(-half_sup, half_sup + 1, dtype=np.int64)
+    idx_loc = (k_bins[:, None] + m_offs[None, :]) % n_samples
+    in_band_only = (~low_mask[idx_loc]) & (idx_loc != 0)
+    s_loc = np.where(in_band_only, s_bm[idx_loc] / float(n_samples), 0.0)
+
+    w_loc = w_fft[:, (-m_offs) % n_samples]
+    w_abs2_sum = np.sum(w_loc.real**2 + w_loc.imag**2, axis=0)
+    tr_band = float(np.sum(s_loc @ w_abs2_sum))
+
+    d_max = min(n_b - 1, 2 * half_sup)
+    tr2_band = 0.0
+    for d in range(0, d_max + 1):
+        if d >= m_offs.size:
+            break
+        wq = w_loc[:, d:]
+        wp = w_loc[:, : m_offs.size - d].conj()
+        w_qp = (wq[:, None, :] * wp[None, :, :]).reshape(k_tapers * k_tapers, -1)
+        s_ov = s_loc[: n_b - d, d:]
+        g_d = s_ov @ w_qp.T
+        frob2 = float(np.sum(g_d.real**2 + g_d.imag**2))
+        tr2_band += frob2 if d == 0 else 2.0 * frob2
+
+    m_min = max(1, int(k_bins[0]) - half_sup)
+    m_max = min(n_samples - 1, int(k_bins[-1]) + half_sup)
+    m_band_len = m_max - m_min + 1
+    acc = np.zeros((m_band_len, m_low.size), dtype=np.complex128)
+    k0_shift = int(k_bins[0]) - m_min
+    for u, off in enumerate(m_offs):
+        pos_start = k0_shift + int(off)
+        i_start = max(0, -pos_start)
+        i_end = min(n_b, m_band_len - pos_start)
+        if i_end <= i_start:
+            continue
+        contrib = np.tensordot(w_loc[:, u].conj(), b_low[:, i_start:i_end, :], axes=([0], [0]))
+        acc[pos_start + i_start : pos_start + i_end] += contrib
+    m_band_vals = np.arange(m_min, m_max + 1, dtype=np.int64)
+    band_valid = (~low_mask[m_band_vals]) & (m_band_vals != 0)
+    acc *= np.where(band_valid, sqrt_s[m_band_vals], 0.0)[:, None]
+    tr2_cross = float(np.sum(acc.real**2 + acc.imag**2))
+
+    tr_tot = tr_low + tr_band
+    tr2_tot = tr2_low + 2.0 * tr2_cross + tr2_band
+    return (tr_tot * tr_tot) / max(tr2_tot, 1e-30)
+
+
+def multitaper_effective_dof(
+    n_samples: int,
+    *,
+    NW: float = 2.5,
+    K_tapers: int | None = None,
+    dt: float = DT_1MIN_SEC,
+    band: str = "Pc5",
+    spectrum_type: str = "flat",
+    t_max_pc6_sec: float = 1800.0,
+    f_min_hz: float | None = None,
+    f_max_hz: float | None = None,
+) -> float:
+    """Compute exact Gram-matrix effective DOF n_eff for Thomson DPSS multitaper (§4.4)."""
+    if n_samples <= 0 or NW <= 0.0 or dt <= 0.0:
+        raise ValueError(
+            f"n_samples, NW, and dt must be positive, got n_samples={n_samples}, NW={NW}, dt={dt}"
+        )
+    k_t = max(1, int(round(2.0 * NW)) - 1) if K_tapers is None else int(K_tapers)
+    if k_t < 1:
+        raise ValueError(f"K_tapers must be >= 1, got {k_t}")
+
+    s_key = spectrum_type.strip().lower()
+    if s_key in ("flat", "white"):
+        is_red = False
+    elif s_key in ("red", "f-2", "f^-2", "brownian", "random_walk"):
+        is_red = True
+    else:
+        raise ValueError(f"Unsupported spectrum_type {spectrum_type!r}")
+
+    spec = get_band_spec(
+        band=band,
+        t_max_pc6_sec=t_max_pc6_sec,
+        f_min_hz=f_min_hz,
+        f_max_hz=f_max_hz,
+    )
+    return _multitaper_effective_dof_cached(
+        int(n_samples),
+        float(NW),
+        int(k_t),
+        float(dt),
+        float(spec.f_min_hz),
+        float(spec.f_max_hz),
+        is_red,
+    )
 
 
 def lookup_welch_effective_n(

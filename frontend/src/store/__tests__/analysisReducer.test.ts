@@ -173,5 +173,27 @@ describe("analysisReducer & state guards", () => {
     const smallWin = analysisReducer(d0b, { type: "SET_WELCH_PARAMS", L: 256, windowSamples: 128 });
     expect(smallWin.L).toBe(256);
     expect(smallWin.windowSamples).toBe(256);
+
+    // Switching L: 256 -> 128 with M = 128 must clamp M to floor(128 / 2) = 64 (not 127!)
+    const withM128 = analysisReducer(smallWin, { type: "SET_WELCH_PARAMS", M: 128 });
+    expect(withM128.M).toBe(128);
+    const backTo128 = analysisReducer(withM128, { type: "SET_WELCH_PARAMS", L: 128 });
+    expect(backTo128.L).toBe(128);
+    expect(backTo128.M).toBe(64);
+
+    // OPEN_WTC_JOB restores external D0 values when provided
+    const openedWithD0 = analysisReducer(backTo128, {
+      type: "OPEN_WTC_JOB",
+      jobId: "wtc-gck",
+      episodeId: SAMPLE_EPISODE.episode_id,
+      stationA: "GCK",
+      stationB: "BEL",
+      component: "Xm",
+      coordFrame: "XmYm",
+      externalD0Deg: 5.5,
+      externalD0DegB: null,
+    });
+    expect(openedWithD0.externalD0Deg).toBe(5.5);
+    expect(openedWithD0.externalD0DegB).toBeNull();
   });
 });

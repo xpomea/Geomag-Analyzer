@@ -2,11 +2,12 @@ import React, { useMemo, useState } from "react";
 import type * as echarts from "echarts";
 import { Eye, EyeOff, Waves } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { formatNum, formatUtcFull } from "../../utils/formatters";
+import { CursorOverlayLine } from "./CursorOverlayLine";
 import {
   CHART_GRID_LEFT,
   CHART_GRID_RIGHT,
-  computeCursorOverlayPercent,
   useSyncedEChart,
 } from "./useSyncedEChart";
 
@@ -19,6 +20,7 @@ export const StokesPanel: React.FC = () => {
     episodeBoundsMs,
     polarizationError,
   } = useAnalysis();
+  const { setCursorUtcMs } = useCursor();
 
   const [logI, setLogI] = useState(false);
 
@@ -311,12 +313,11 @@ export const StokesPanel: React.FC = () => {
     boundsMs: episodeBoundsMs,
     onViewRangeChange: (rangeMs) =>
       dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs }),
-    onCursorChange: (utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs }),
+    onCursorChange: setCursorUtcMs,
   });
 
   const s2 = maskedPolarization?.stokes2d ?? null;
   const p3 = polarizationRaw?.pol_3d ?? null;
-  const cursorFrac = computeCursorOverlayPercent(state.cursorUtcMs, state.viewRangeMs);
 
   return (
     <section className="panel-card">
@@ -410,19 +411,7 @@ export const StokesPanel: React.FC = () => {
         {option ? (
           <div style={{ position: "relative", height: 328 }}>
             <div ref={containerRef} className="chart-host" style={{ height: 328 }} />
-            {cursorFrac !== null && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 20,
-                  bottom: 24,
-                  left: `calc(${CHART_GRID_LEFT}px + ${cursorFrac} * (100% - ${CHART_GRID_LEFT + CHART_GRID_RIGHT}px))`,
-                  width: 1,
-                  borderLeft: "1px dashed rgba(56, 189, 248, 0.75)",
-                  pointerEvents: "none",
-                }}
-              />
-            )}
+            <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={20} bottom={24} />
           </div>
         ) : (
           <div className="empty-note">Нет валидных окон Стокса для текущей станции и параметров.</div>

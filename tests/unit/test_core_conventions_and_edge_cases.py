@@ -291,3 +291,77 @@ def test_default_trim_hours_and_variant_b_custom_bands():
     st = gc.stokes_from_spectral_matrix_2d(res.S)
     assert math.isclose(st.p, 1.0, abs_tol=0.01)
     assert abs(st.psi_deg - (-20.0)) < 0.5
+
+
+def test_multitaper_effective_dof_matches_monte_carlo_within_5pct():
+    from scipy.signal.windows import dpss
+
+    def _mc_multitaper_n(n_samples: int, band: str, spectrum_type: str) -> float:
+        rng = np.random.default_rng(12345)
+        k_t = 4
+        tapers = dpss(n_samples, NW=2.5, Kmax=k_t)
+        freqs = np.fft.rfftfreq(n_samples, d=gc.DT_1MIN_SEC)
+        f_mask = gc.band_frequency_mask(freqs, band=band)
+        p2_parts: list[np.ndarray] = []
+        for _ in range(10):
+            noise = rng.standard_normal((250, n_samples, 2))
+            if spectrum_type == "red":
+                noise = np.cumsum(noise, axis=1)
+            work = gc.detrend_linear_ols(noise, axis=1)
+            tapered = work[:, None, :, :] * tapers[None, :, :, None]
+            fb = np.fft.rfft(tapered, axis=2)[:, :, f_mask, :]
+            sxx = np.mean(np.abs(fb[..., 0]) ** 2, axis=(1, 2))
+            syy = np.mean(np.abs(fb[..., 1]) ** 2, axis=(1, 2))
+            sxy = np.mean(fb[..., 0] * np.conj(fb[..., 1]), axis=(1, 2))
+            i_v = sxx + syy
+            q_v = sxx - syy
+            u_v = 2.0 * np.real(sxy)
+            v_v = 2.0 * np.imag(sxy)
+            p2_parts.append((q_v**2 + u_v**2 + v_v**2) / (i_v**2))
+        mean_p2 = float(np.mean(np.concatenate(p2_parts)))
+        return 0.5 * (3.0 / mean_p2 - 1.0)
+
+    cases = [
+        (360, "Pc5", "flat"),
+        (360, "Pc6", "flat"),
+        (1440, "Pc5", "flat"),
+        (360, "Pc5", "red"),
+        (360, "Pc6", "red"),
+        (1440, "Pc6", "red"),
+    ]
+    for n_samples, band, spec in cases:
+        n_gram = gc.multitaper_effective_dof(n_samples, NW=2.5, band=band, spectrum_type=spec)
+        n_mc = _mc_multitaper_n(n_samples, band, spec)
+        rel_err = abs(n_gram - n_mc) / n_mc
+        assert rel_err <= 0.05, (
+            f"Multitaper DOF mismatch for N={n_samples}, {band}, {spec}: "
+            f"gram={n_gram:.2f} vs MC={n_mc:.2f} (err={rel_err * 100:.2f}%)"
+        )
+
+
+def test_welch_matrix_window_index_and_flr_spectrum_type():
+    rng = np.random.default_rng(77)
+    spectra = [
+        gc.compute_station_phase1_spectra(
+            rng.standard_normal(1024),
+            station_iaga=f"S{i}",
+            window_samples=360,
+            step_samples=120,
+        )
+        for i in range(4)
+    ]
+    full_mat = gc.compute_welch_cross_matrix(spectra, band="Pc5")
+    sub_mat = gc.compute_welch_cross_matrix(spectra, band="Pc5", window_index=2)
+    assert sub_mat.gamma2.shape == (1, 4, 4)
+    assert np.array_equal(sub_mat.window_center_indices, full_mat.window_center_indices[2:3])
+    assert np.allclose(sub_mat.gamma2[0], full_mat.gamma2[2], equal_nan=True, atol=1e-12)
+    assert np.allclose(
+        sub_mat.phase_deg_masked[0], full_mat.phase_deg_masked[2], equal_nan=True, atol=1e-12
+    )
+    with pytest.raises(ValueError, match="window_index"):
+        gc.compute_welch_cross_matrix(spectra, band="Pc5", window_index=99)
+
+    lats = [50.0, 55.0, 60.0, 65.0]
+    flr_flat = gc.compute_meridional_flr_profile(spectra, lats, band="Pc5", spectrum_type="flat")
+    flr_red = gc.compute_meridional_flr_profile(spectra, lats, band="Pc5", spectrum_type="red")
+    assert np.all(flr_red.pair_gamma2_crit > flr_flat.pair_gamma2_crit)

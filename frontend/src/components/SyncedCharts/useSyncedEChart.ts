@@ -40,8 +40,6 @@ export function useSyncedEChart({
 
     const chart = echarts.init(containerEl, undefined, { renderer: "canvas" });
     chartRef.current = chart;
-    chart.group = CHART_SYNC_GROUP;
-    echarts.connect(CHART_SYNC_GROUP);
 
     const observer = new ResizeObserver(() => {
       chart.resize();

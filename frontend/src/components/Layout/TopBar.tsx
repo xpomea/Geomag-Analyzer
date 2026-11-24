@@ -2,7 +2,14 @@ import React, { useState } from "react";
 import { Activity, Cpu, Loader2, Power, Radio } from "lucide-react";
 import { TERMINAL_JOB_STATUSES } from "../../api/client";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { formatUtcFull } from "../../utils/formatters";
+
+const TopBarCursorPill: React.FC = () => {
+  const { cursorUtcMs } = useCursor();
+  if (cursorUtcMs === null) return null;
+  return <span className="pill mono">UTC: {formatUtcFull(cursorUtcMs)}</span>;
+};
 
 export const TopBar: React.FC = () => {
   const { state, dispatch, health, activeEpisode, triggerShutdown } = useAnalysis();
@@ -29,9 +36,7 @@ export const TopBar: React.FC = () => {
             {state.stationA} ↔ {state.stationB} · {state.band} · {state.coordFrame}
           </span>
           <span className="pill mono">α = {state.alpha}</span>
-          {state.cursorUtcMs !== null && (
-            <span className="pill mono">UTC: {formatUtcFull(state.cursorUtcMs)}</span>
-          )}
+          <TopBarCursorPill />
           {health ? (
             <span className="pill pill-ok">
               <Activity size={12} />

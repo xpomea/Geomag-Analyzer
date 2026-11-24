@@ -46,11 +46,13 @@ import type {
 } from "../api/types";
 import { applySolar1Shift, type ShiftedSolar1Output } from "../utils/ballisticShift";
 import {
+  applyFlrAlphaMask,
   applyPolarizationAlphaMask,
   applyWelchAlphaMask,
   type MaskedPolarizationView,
   type MaskedWelchView,
 } from "../utils/masking";
+import { CursorProvider } from "./CursorContext";
 import {
   INITIAL_ANALYSIS_STATE,
   analysisReducer,
@@ -128,7 +130,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [rawSpaceWeather, setRawSpaceWeather] = useState<SpaceWeatherResponse | null>(null);
   const [polarizationRaw, setPolarizationRaw] = useState<PolarizationResponse | null>(null);
   const [welchPairRaw, setWelchPairRaw] = useState<WelchPairResponse | null>(null);
-  const [flrProfile, setFlrProfile] = useState<MeridionalFLRResponse | null>(null);
+  const [flrProfileRaw, setFlrProfileRaw] = useState<MeridionalFLRResponse | null>(null);
   const [wtcResult, setWtcResult] = useState<WTCResultResponse | null>(null);
 
   const [loadingCatalog, setLoadingCatalog] = useState(false);
@@ -145,6 +147,11 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [wtcError, setWtcError] = useState<string | null>(null);
 
   const wsSubsRef = useRef<Map<string, () => void>>(new Map());
+  const cursorRef = useRef<number | null>(state.cursorUtcMs);
+  const jobsRef = useRef(state.jobs);
+  jobsRef.current = state.jobs;
+  const wtcAbortRef = useRef<AbortController | null>(null);
+  const flrAbortRef = useRef<AbortController | null>(null);
 
   const refreshJobsAndCache = useCallback(async () => {
     try {
@@ -409,6 +416,8 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
       .catch((err) => {
         if ((err as Error).name !== "AbortError") {
+          setGeomag(null);
+          setPolarizationRaw(null);
           setPolarizationError(
             err instanceof ApiError ? err.detail : (err as Error).message,
           );
@@ -503,6 +512,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
       .catch((err) => {
         if ((err as Error).name !== "AbortError") {
+          setWelchPairRaw(null);
           setWelchError(err instanceof ApiError ? err.detail : (err as Error).message);
         }
       })
@@ -593,12 +603,31 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         unsub();
       }
       subs.clear();
+      wtcAbortRef.current?.abort();
+      flrAbortRef.current?.abort();
     };
   }, []);
 
   useEffect(() => {
-    setFlrProfile(null);
-  }, [state.episodeId]);
+    setFlrProfileRaw(null);
+  }, [
+    state.episodeId,
+    state.band,
+    state.tMaxPc6Sec,
+    state.coordFrame,
+    state.crossComponent,
+    state.spectrumType,
+    state.L,
+    state.M,
+    state.windowSamples,
+    state.stepSamples,
+    state.meridionalChain,
+  ]);
+
+  const flrProfile = useMemo<MeridionalFLRResponse | null>(() => {
+    if (!flrProfileRaw) return null;
+    return applyFlrAlphaMask(flrProfileRaw, state.alpha, 0.05);
+  }, [flrProfileRaw, state.alpha]);
 
   const openWtcJobResult = useCallback(
     async (jobId: string, strideOverride?: number) => {
@@ -606,10 +635,16 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (strideOverride !== undefined && strideOverride !== state.wtcStride) {
         dispatch({ type: "SET_WTC_STRIDE", stride: strideOverride });
       }
+      wtcAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      wtcAbortRef.current = ctrl;
+
       setLoadingWtcResult(true);
       setWtcError(null);
       try {
-        const res = await getWtcJobResult(jobId, effStride);
+        const res = await getWtcJobResult(jobId, effStride, ctrl.signal);
+        if (ctrl.signal.aborted) return;
+
         const ep = catalog?.episodes.find((e) => e.episode_id === res.episode_id);
         let bounds: [number, number] | null = null;
         if (ep) {
@@ -621,6 +656,32 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ];
         }
         const coordFrame: CoordFrame = res.coord_frame === "XmYm" ? "XmYm" : "XYZ";
+
+        const jobObj = jobsRef.current.find((j) => j.job_id === jobId);
+        let restoredD0A: number | null | undefined;
+        let restoredD0B: number | null | undefined;
+        if (coordFrame === "XmYm" && jobObj?.params) {
+          const p = jobObj.params as Record<string, unknown>;
+          const extA = p.external_d0_deg_i;
+          const extB = p.external_d0_deg_j;
+          const stA = stationMetaMap.get(res.station_i.toUpperCase());
+          const stB = stationMetaMap.get(res.station_j.toUpperCase());
+          if (typeof extA === "number" && Number.isFinite(extA)) {
+            restoredD0A = extA;
+          } else if (stA && !stA.has_baseline && typeof p.d0_deg_i === "number") {
+            restoredD0A = p.d0_deg_i;
+          } else {
+            restoredD0A = null;
+          }
+          if (typeof extB === "number" && Number.isFinite(extB)) {
+            restoredD0B = extB;
+          } else if (stB && !stB.has_baseline && typeof p.d0_deg_j === "number") {
+            restoredD0B = p.d0_deg_j;
+          } else {
+            restoredD0B = null;
+          }
+        }
+
         dispatch({
           type: "OPEN_WTC_JOB",
           jobId,
@@ -629,16 +690,24 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           stationB: res.station_j,
           component: res.component as CrossComponent,
           coordFrame,
+          externalD0Deg: restoredD0A,
+          externalD0DegB: restoredD0B,
           boundsMs: bounds,
         });
         setWtcResult(res);
       } catch (err) {
+        if ((err as Error).name === "AbortError" || ctrl.signal.aborted) {
+          return;
+        }
+        setWtcResult(null);
         setWtcError(err instanceof ApiError ? err.detail : (err as Error).message);
       } finally {
-        setLoadingWtcResult(false);
+        if (wtcAbortRef.current === ctrl) {
+          setLoadingWtcResult(false);
+        }
       }
     },
-    [state.wtcStride, catalog],
+    [state.wtcStride, catalog, stationMetaMap],
   );
 
   // Auto-load active WTC result once its job completes/caches
@@ -720,11 +789,22 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const loadFlrAtCursor = useCallback(
     async (windowIndexOverride?: number) => {
+      flrAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      flrAbortRef.current = ctrl;
+
       setLoadingFlr(true);
       setFlrError(null);
       let winIdx = windowIndexOverride ?? 0;
-      if (windowIndexOverride === undefined && welchPairRaw && welchPairRaw.window_timestamps_utc.length > 0) {
-        const targetMs = state.cursorUtcMs ?? Date.parse(welchPairRaw.window_timestamps_utc[0]);
+      if (
+        windowIndexOverride === undefined &&
+        welchPairRaw &&
+        welchPairRaw.window_timestamps_utc.length > 0
+      ) {
+        const targetMs =
+          cursorRef.current ??
+          state.cursorUtcMs ??
+          Date.parse(welchPairRaw.window_timestamps_utc[0]);
         let bestIdx = 0;
         let bestDiff = Number.POSITIVE_INFINITY;
         welchPairRaw.window_timestamps_utc.forEach((iso, idx) => {
@@ -738,25 +818,37 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       try {
-        const res = await computeWelchFlr({
-          episode_id: state.episodeId,
-          station_chain: state.meridionalChain,
-          component: state.crossComponent,
-          coord_frame: state.coordFrame,
-          band: state.band,
-          t_max_pc6_sec: state.tMaxPc6Sec,
-          L: state.L,
-          M: state.M,
-          window_samples: state.windowSamples,
-          step_samples: state.stepSamples,
-          window_index: winIdx,
-          alpha: state.alpha,
-        });
-        setFlrProfile(res);
+        const res = await computeWelchFlr(
+          {
+            episode_id: state.episodeId,
+            station_chain: state.meridionalChain,
+            component: state.crossComponent,
+            coord_frame: state.coordFrame,
+            band: state.band,
+            t_max_pc6_sec: state.tMaxPc6Sec,
+            L: state.L,
+            M: state.M,
+            window_samples: state.windowSamples,
+            step_samples: state.stepSamples,
+            window_index: winIdx,
+            alpha: 0.05,
+            spectrum_type: state.spectrumType,
+          },
+          ctrl.signal,
+        );
+        if (!ctrl.signal.aborted) {
+          setFlrProfileRaw(res);
+        }
       } catch (err) {
+        if ((err as Error).name === "AbortError" || ctrl.signal.aborted) {
+          return;
+        }
+        setFlrProfileRaw(null);
         setFlrError(err instanceof ApiError ? err.detail : (err as Error).message);
       } finally {
-        setLoadingFlr(false);
+        if (flrAbortRef.current === ctrl) {
+          setLoadingFlr(false);
+        }
       }
     },
     [
@@ -772,7 +864,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       state.M,
       state.windowSamples,
       state.stepSamples,
-      state.alpha,
+      state.spectrumType,
     ],
   );
 
@@ -787,47 +879,93 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  const value: AnalysisContextValue = {
-    state,
-    dispatch,
-    auth,
-    health,
-    catalog,
-    activeEpisode,
-    episodeBoundsMs,
-    stationMetaMap,
-    stationAvailabilityMap,
-    geomag,
-    rawSpaceWeather,
-    shiftedSolar1,
-    polarizationRaw,
-    maskedPolarization,
-    welchPairRaw,
-    maskedWelch,
-    flrProfile,
-    wtcResult,
-    loadingCatalog,
-    loadingTimeseries,
-    loadingPolarization,
-    loadingWelch,
-    loadingFlr,
-    loadingWtcResult,
-    globalError,
-    polarizationError,
-    welchError,
-    flrError,
-    wtcError,
-    baselineWarning,
-    authenticateWithToken,
-    refreshJobsAndCache,
-    launchWtcJob,
-    cancelWtcJob,
-    openWtcJobResult,
-    loadFlrAtCursor,
-    triggerShutdown,
-  };
+  const value = useMemo<AnalysisContextValue>(
+    () => ({
+      state,
+      dispatch,
+      auth,
+      health,
+      catalog,
+      activeEpisode,
+      episodeBoundsMs,
+      stationMetaMap,
+      stationAvailabilityMap,
+      geomag,
+      rawSpaceWeather,
+      shiftedSolar1,
+      polarizationRaw,
+      maskedPolarization,
+      welchPairRaw,
+      maskedWelch,
+      flrProfile,
+      wtcResult,
+      loadingCatalog,
+      loadingTimeseries,
+      loadingPolarization,
+      loadingWelch,
+      loadingFlr,
+      loadingWtcResult,
+      globalError,
+      polarizationError,
+      welchError,
+      flrError,
+      wtcError,
+      baselineWarning,
+      authenticateWithToken,
+      refreshJobsAndCache,
+      launchWtcJob,
+      cancelWtcJob,
+      openWtcJobResult,
+      loadFlrAtCursor,
+      triggerShutdown,
+    }),
+    [
+      state,
+      auth,
+      health,
+      catalog,
+      activeEpisode,
+      episodeBoundsMs,
+      stationMetaMap,
+      stationAvailabilityMap,
+      geomag,
+      rawSpaceWeather,
+      shiftedSolar1,
+      polarizationRaw,
+      maskedPolarization,
+      welchPairRaw,
+      maskedWelch,
+      flrProfile,
+      wtcResult,
+      loadingCatalog,
+      loadingTimeseries,
+      loadingPolarization,
+      loadingWelch,
+      loadingFlr,
+      loadingWtcResult,
+      globalError,
+      polarizationError,
+      welchError,
+      flrError,
+      wtcError,
+      baselineWarning,
+      authenticateWithToken,
+      refreshJobsAndCache,
+      launchWtcJob,
+      cancelWtcJob,
+      openWtcJobResult,
+      loadFlrAtCursor,
+      triggerShutdown,
+    ],
+  );
 
-  return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>;
+  return (
+    <AnalysisContext.Provider value={value}>
+      <CursorProvider resetValue={state.cursorUtcMs} cursorRef={cursorRef}>
+        {children}
+      </CursorProvider>
+    </AnalysisContext.Provider>
+  );
 };
 
 export function useAnalysis(): AnalysisContextValue {

@@ -251,36 +251,58 @@ class JobManager:
         *,
         params: dict[str, Any],
         cache_key: str,
+        reverse_cache_key: str | None = None,
     ) -> dict[str, Any]:
         """Submit a Tier 3 XWT/WTC job or immediately return cached/in-flight handle."""
-        hit = self.cache.find("cross_wtc", cache_key)
         total_steps = max(1, int(params["n_surrogates"]))
-        if hit is not None:
-            path, source = hit
-            self.cache.register_entry(
-                cache_key=cache_key,
-                category="cross_wtc",
-                file_path=path,
-                source=source,
-                params=params["canonical_cache_params"],
-            )
-            return self._insert_job_row(
-                job_id=uuid.uuid4().hex,
-                job_type="cross_wtc",
-                cache_key=cache_key,
-                status="cached",
-                stage="cached",
-                progress_pct=100.0,
-                completed_steps=total_steps,
-                total_steps=total_steps,
-                eta_sec=0.0,
-                cache_hit=True,
-                result_path=str(path),
-                error_message=None,
-                params=params,
-            )
-
         with self._lock:
+            hit = self.cache.find("cross_wtc", cache_key)
+            if hit is not None:
+                path, source = hit
+                self.cache.register_entry(
+                    cache_key=cache_key,
+                    category="cross_wtc",
+                    file_path=path,
+                    source=source,
+                    params=params["canonical_cache_params"],
+                )
+                return self._insert_job_row(
+                    job_id=uuid.uuid4().hex,
+                    job_type="cross_wtc",
+                    cache_key=cache_key,
+                    status="cached",
+                    stage="cached",
+                    progress_pct=100.0,
+                    completed_steps=total_steps,
+                    total_steps=total_steps,
+                    eta_sec=0.0,
+                    cache_hit=True,
+                    result_path=str(path),
+                    error_message=None,
+                    params=params,
+                )
+
+            if reverse_cache_key is not None and reverse_cache_key != cache_key:
+                rev_hit = self.cache.find("cross_wtc", reverse_cache_key)
+                if rev_hit is not None:
+                    rev_path, _ = rev_hit
+                    rev_params = {**params, "phase_negated": True}
+                    return self._insert_job_row(
+                        job_id=uuid.uuid4().hex,
+                        job_type="cross_wtc",
+                        cache_key=reverse_cache_key,
+                        status="cached",
+                        stage="cached",
+                        progress_pct=100.0,
+                        completed_steps=total_steps,
+                        total_steps=total_steps,
+                        eta_sec=0.0,
+                        cache_hit=True,
+                        result_path=str(rev_path),
+                        error_message=None,
+                        params=rev_params,
+                    )
+
             now = utc_now_iso()
             conn = self.cache.connect_runtime()
             try:

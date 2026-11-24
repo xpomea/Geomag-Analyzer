@@ -1,10 +1,12 @@
 import React from "react";
 import { Clock, ZoomIn } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { formatUtcFull, formatUtcShort } from "../../utils/formatters";
 
 export const TimeScrubberBar: React.FC = () => {
   const { state, dispatch, episodeBoundsMs } = useAnalysis();
+  const { cursorUtcMs, setCursorUtcMs } = useCursor();
 
   if (!episodeBoundsMs) {
     return (
@@ -16,7 +18,7 @@ export const TimeScrubberBar: React.FC = () => {
 
   const [bStart, bEnd] = episodeBoundsMs;
   const viewRange = state.viewRangeMs ?? [bStart, bEnd];
-  const cursorMs = state.cursorUtcMs ?? Math.round(0.5 * (bStart + bEnd));
+  const cursorMs = cursorUtcMs ?? Math.round(0.5 * (bStart + bEnd));
 
   const setDurationPreset = (hours: number | null) => {
     if (hours === null) {
@@ -63,7 +65,7 @@ export const TimeScrubberBar: React.FC = () => {
           max={bEnd}
           step={60_000}
           value={Math.min(bEnd, Math.max(bStart, cursorMs))}
-          onChange={(e) => dispatch({ type: "SET_CURSOR_UTC", utcMs: Number(e.target.value) })}
+          onChange={(e) => setCursorUtcMs(Number(e.target.value))}
           aria-label="Курсор времени UTC"
         />
         <span className="mono" style={{ fontSize: 12, minWidth: 145, textAlign: "right" }}>

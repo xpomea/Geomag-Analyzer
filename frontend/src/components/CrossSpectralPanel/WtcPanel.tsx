@@ -3,6 +3,7 @@ import { Play, Sparkles, XCircle } from "lucide-react";
 import { TERMINAL_JOB_STATUSES } from "../../api/client";
 import type { GapPolicy } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { formatEta } from "../../utils/formatters";
 import { DraftNumberInput } from "../Layout/DraftNumberInput";
 import { ScientificHeatmap2D } from "../SyncedCharts/ScientificHeatmap2D";
@@ -19,6 +20,7 @@ export const WtcPanel: React.FC = () => {
     cancelWtcJob,
     openWtcJobResult,
   } = useAnalysis();
+  const { setCursorUtcMs } = useCursor();
 
   const [periodMinSec, setPeriodMinSec] = useState(120);
   const [periodMaxSec, setPeriodMaxSec] = useState(3600);
@@ -286,9 +288,18 @@ export const WtcPanel: React.FC = () => {
                 type="button"
                 className={`btn btn-sm ${showContours && hasMc ? "btn-primary" : ""}`}
                 disabled={!hasMc}
+                title={
+                  hasMc && mapView === "xwt"
+                    ? `Контур Монте-Карло ${mcConfPct}% относится к вейвлет-когерентности (WTC R²)`
+                    : undefined
+                }
                 onClick={() => setShowContours((v) => !v)}
               >
-                {hasMc ? `${mcConfPct}% MC контур` : "MC отключён (N=0)"}
+                {hasMc
+                  ? mapView === "xwt"
+                    ? `Контур WTC ${mcConfPct}%`
+                    : `${mcConfPct}% MC контур`
+                  : "MC отключён (N=0)"}
               </button>
               <button
                 type="button"
@@ -318,8 +329,7 @@ export const WtcPanel: React.FC = () => {
             onViewRangeChange={(rangeMs) =>
               dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs })
             }
-            cursorUtcMs={state.cursorUtcMs}
-            onCursorChange={(utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs })}
+            onCursorChange={setCursorUtcMs}
             coiPeriods={wtcResult.coi_periods_sec}
             contourGrid={contourGridProp}
             phaseVectors={phaseVectorsProp}

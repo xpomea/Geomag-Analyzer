@@ -23,6 +23,7 @@ export type GapPolicy = "subsegments" | "gap_coi";
 export type JobStatus =
   | "queued"
   | "running"
+  | "cancelling"
   | "completed"
   | "cached"
   | "cancelled"
@@ -369,6 +370,40 @@ export interface WelchPairResponse {
   warnings: string[];
 }
 
+export interface WelchMatrixRequest {
+  episode_id: string;
+  station_iagas?: string[] | null;
+  component?: CrossComponent;
+  coord_frame?: CoordFrame;
+  band?: string;
+  t_max_pc6_sec?: number;
+  L?: number;
+  M?: number;
+  window_samples?: number;
+  step_samples?: number;
+  alpha?: number;
+  min_common_segments?: number;
+  spectrum_type?: SpectrumType;
+  window_index?: number | null;
+}
+
+export interface WelchMatrixResponse {
+  episode_id: string;
+  component: string;
+  coord_frame: string;
+  band: string;
+  station_codes: string[];
+  window_timestamps_utc: string[];
+  gamma2: (number | null)[][][];
+  gamma2_crit: (number | null)[][][];
+  phase_deg_masked: (number | null)[][][];
+  K_ij: number[][][];
+  is_significant: boolean[][][];
+  cache_hits: Record<string, boolean>;
+  skipped_stations: Record<string, string>;
+  elapsed_ms: number;
+}
+
 export interface MeridionalFLRRequest {
   episode_id: string;
   station_chain: string[];
@@ -383,6 +418,7 @@ export interface MeridionalFLRRequest {
   window_index?: number;
   alpha?: number;
   min_common_segments?: number;
+  spectrum_type?: SpectrumType;
 }
 
 export interface MeridionalFLRResponse {

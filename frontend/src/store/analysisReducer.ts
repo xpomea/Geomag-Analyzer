@@ -156,6 +156,8 @@ export type AnalysisAction =
       stationB: string;
       component: CrossComponent;
       coordFrame: CoordFrame;
+      externalD0Deg?: number | null;
+      externalD0DegB?: number | null;
       boundsMs?: [number, number] | null;
     }
   | { type: "SET_JOBS"; jobs: JobStatusResponse[] }
@@ -284,7 +286,8 @@ export function analysisReducer(
     case "SET_WELCH_PARAMS": {
       const nextL = Math.max(16, action.L ?? state.L);
       const rawM = action.M ?? state.M;
-      const nextM = Math.max(1, Math.min(rawM, Math.max(1, nextL - 1)));
+      const maxM = Math.max(1, Math.floor(nextL / 2));
+      const nextM = Math.max(1, Math.min(rawM, maxM));
       const nextWin = Math.max(nextL, action.windowSamples ?? state.windowSamples);
       return {
         ...state,
@@ -370,6 +373,10 @@ export function analysisReducer(
         stationB: action.stationB.toUpperCase(),
         coordFrame: action.coordFrame,
         crossComponent: harmonizeCrossComponent(action.component, action.coordFrame),
+        externalD0Deg:
+          action.externalD0Deg !== undefined ? action.externalD0Deg : state.externalD0Deg,
+        externalD0DegB:
+          action.externalD0DegB !== undefined ? action.externalD0DegB : state.externalD0DegB,
         viewRangeMs: nextRange,
         cursorUtcMs: nextCursor,
         activeWtcJobId: action.jobId,

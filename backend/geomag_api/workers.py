@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,34 @@ def worker_init() -> None:
         "NUMEXPR_NUM_THREADS",
     ):
         os.environ[env_var] = "1"
+    numba_mod = sys.modules.get("numba")
+    if numba_mod is not None:
+        try:
+            numba_mod.set_num_threads(1)
+        except Exception:
+            pass
+
+
+def inspect_worker_runtime() -> dict[str, Any]:
+    """Return worker thread configuration and loaded module state (for spawn diagnostics)."""
+    main_loaded = "geomag_api.main" in sys.modules
+    fastapi_loaded = "fastapi" in sys.modules
+    numba_threads: int | None = None
+    numba_config_threads: int | None = None
+    try:
+        import numba
+
+        numba_config_threads = int(numba.config.NUMBA_NUM_THREADS)
+        numba_threads = int(numba.get_num_threads())
+    except Exception:
+        pass
+    return {
+        "env_numba_threads": os.environ.get("NUMBA_NUM_THREADS"),
+        "numba_config_threads": numba_config_threads,
+        "numba_get_num_threads": numba_threads,
+        "main_loaded": main_loaded,
+        "fastapi_loaded": fastapi_loaded,
+    }
 
 
 def _load_station_series_for_worker(

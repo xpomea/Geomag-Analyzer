@@ -2,11 +2,12 @@ import React, { useMemo } from "react";
 import type * as echarts from "echarts";
 import { AlertCircle, Sun } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { formatUtcFull } from "../../utils/formatters";
+import { CursorOverlayLine } from "./CursorOverlayLine";
 import {
   CHART_GRID_LEFT,
   CHART_GRID_RIGHT,
-  computeCursorOverlayPercent,
   useSyncedEChart,
 } from "./useSyncedEChart";
 
@@ -19,6 +20,7 @@ export const SpaceWeatherPanel: React.FC = () => {
     episodeBoundsMs,
     loadingTimeseries,
   } = useAnalysis();
+  const { setCursorUtcMs } = useCursor();
 
   const option = useMemo<echarts.EChartsCoreOption | null>(() => {
     if (!shiftedSolar1 || !rawSpaceWeather) return null;
@@ -257,10 +259,8 @@ export const SpaceWeatherPanel: React.FC = () => {
     boundsMs: episodeBoundsMs,
     onViewRangeChange: (rangeMs) =>
       dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs }),
-    onCursorChange: (utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs }),
+    onCursorChange: setCursorUtcMs,
   });
-
-  const cursorFrac = computeCursorOverlayPercent(state.cursorUtcMs, state.viewRangeMs);
 
   return (
     <section className="panel-card">
@@ -285,19 +285,7 @@ export const SpaceWeatherPanel: React.FC = () => {
       <div className="panel-body">
         <div style={{ position: "relative", height: 332 }}>
           <div ref={containerRef} className="chart-host" style={{ height: 332 }} />
-          {cursorFrac !== null && (
-            <div
-              style={{
-                position: "absolute",
-                top: 20,
-                bottom: 24,
-                left: `calc(${CHART_GRID_LEFT}px + ${cursorFrac} * (100% - ${CHART_GRID_LEFT + CHART_GRID_RIGHT}px))`,
-                width: 1,
-                borderLeft: "1px dashed rgba(56, 189, 248, 0.75)",
-                pointerEvents: "none",
-              }}
-            />
-          )}
+          <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={20} bottom={24} />
         </div>
       </div>
     </section>

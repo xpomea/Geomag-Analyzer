@@ -1,5 +1,6 @@
 import type {
   DynamicPolarizationOut,
+  MeridionalFLRResponse,
   PolarizationResponse,
   Stokes2DOut,
   WelchPairResponse,
@@ -288,5 +289,63 @@ export function applyWelchAlphaMask(
     azimuthalMMasked: mMasked,
     gamma2CritTf,
     phaseDegTfMasked,
+  };
+}
+
+export function applyFlrAlphaMask(
+  flr: MeridionalFLRResponse,
+  alpha: number,
+  initialAlpha = 0.05,
+): MeridionalFLRResponse {
+  const nPairs = flr.pair_coherence.length;
+  const nextCrit: (number | null)[] = new Array(nPairs);
+  const nextSig: boolean[] = new Array(nPairs);
+  const nextCum: (number | null)[] = new Array(flr.station_codes.length).fill(null);
+  const nextGrad: (number | null)[] = new Array(nPairs).fill(null);
+
+  if (nextCum.length > 0) {
+    nextCum[0] = 0;
+  }
+
+  for (let i = 0; i < nPairs; i++) {
+    const gc0 = flr.pair_gamma2_crit[i];
+    const gc =
+      gc0 !== null && gc0 !== undefined && Number.isFinite(gc0)
+        ? scaleGamma2CritForAlpha(gc0, initialAlpha, alpha)
+        : null;
+    nextCrit[i] = gc;
+
+    const g2 = flr.pair_coherence[i];
+    const ph = flr.pair_phase_deg[i];
+    const sig = Boolean(
+      g2 !== null &&
+        g2 !== undefined &&
+        Number.isFinite(g2) &&
+        gc !== null &&
+        Number.isFinite(gc) &&
+        ph !== null &&
+        ph !== undefined &&
+        Number.isFinite(ph) &&
+        g2 > gc,
+    );
+    nextSig[i] = sig;
+
+    const dLat = (flr.latitudes_deg[i + 1] ?? 0) - (flr.latitudes_deg[i] ?? 0);
+    if (sig && ph !== null && ph !== undefined && Number.isFinite(ph)) {
+      if (i + 1 < nextCum.length && nextCum[i] !== null && Number.isFinite(nextCum[i])) {
+        nextCum[i + 1] = (nextCum[i] as number) - ph;
+      }
+      if (Math.abs(dLat) > 1e-6) {
+        nextGrad[i] = -ph / dLat;
+      }
+    }
+  }
+
+  return {
+    ...flr,
+    pair_gamma2_crit: nextCrit,
+    pair_is_significant: nextSig,
+    cumulative_phase_deg: nextCum,
+    phase_gradient_deg_per_lat: nextGrad,
   };
 }

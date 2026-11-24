@@ -16,6 +16,7 @@ from geomag_core import (
     effective_n_formula48,
     find_valid_subsegments,
     is_window_valid,
+    multitaper_effective_dof,
     periodic_hann_window,
     polarization_3d,
     run_variant_b_pipeline,
@@ -40,26 +41,6 @@ from .schemas import (
 from .serializers import timestamps_to_iso, to_json_float, to_json_list
 
 router = APIRouter(prefix="/api/polarization", tags=["polarization"])
-
-
-def _multitaper_band_dof(
-    freqs_hz: np.ndarray,
-    *,
-    k_tapers: int,
-    nw: float,
-    spectrum_type: str,
-) -> float:
-    """Estimate effective DOF for DPSS multitaper band average (flat vs red spectrum)."""
-    n_b = int(freqs_hz.shape[0])
-    if n_b == 0:
-        return 2.0
-    if spectrum_type == "red":
-        f_safe = np.maximum(np.asarray(freqs_hz, dtype=np.float64), 1e-12)
-        weights = f_safe ** (-2.0)
-        n_b_eff = float(np.sum(weights) ** 2) / max(float(np.sum(weights**2)), 1e-30)
-    else:
-        n_b_eff = float(n_b)
-    return max(2.0, float(k_tapers) * max(1.0, n_b_eff / max(1.0, 2.0 * float(nw))))
 
 
 def _stokes_to_schema(st: Stokes2D) -> Stokes2DOut:
@@ -410,7 +391,7 @@ def compute_polarization(
                 warnings=warnings,
             )
 
-        s_mats, w_lens, dof_sum = [], [], 0.0
+        s_mats, w_lens, dof_vals = [], [], []
         for s_idx, e_idx in subsegs:
             mt = compute_multitaper_spectral_matrix(
                 xyz[s_idx:e_idx],
@@ -423,15 +404,30 @@ def compute_polarization(
             )
             s_mats.append(mt.S)
             w_lens.append(float(e_idx - s_idx))
-            dof_sum += _multitaper_band_dof(
-                mt.freqs_hz,
-                k_tapers=mt.K_tapers,
-                nw=req.nw,
-                spectrum_type=req.spectrum_type,
+            dof_vals.append(
+                multitaper_effective_dof(
+                    mt.N,
+                    NW=req.nw,
+                    K_tapers=mt.K_tapers,
+                    dt=DT_1MIN_SEC,
+                    band=req.band,
+                    spectrum_type=req.spectrum_type,
+                    t_max_pc6_sec=req.t_max_pc6_sec,
+                    f_min_hz=req.f_min_hz,
+                    f_max_hz=req.f_max_hz,
+                )
             )
 
         s_overall = aggregate_spectral_matrices(s_mats, weights=w_lens)
-        n_eff_mt = max(2.0, dof_sum)
+        w_arr = np.asarray(w_lens, dtype=np.float64)
+        d_arr = np.asarray(dof_vals, dtype=np.float64)
+        n_eff_mt = max(
+            2.0,
+            float(
+                (np.sum(w_arr) ** 2)
+                / max(float(np.sum((w_arr**2) / np.maximum(d_arr, 1e-12))), 1e-30)
+            ),
+        )
         stokes_out = _stokes_to_schema(
             stokes_from_spectral_matrix_2d(s_overall, n_eff=n_eff_mt, alpha=req.alpha)
         )
@@ -471,11 +467,19 @@ def compute_polarization(
                             f_min_hz=req.f_min_hz,
                             f_max_hz=req.f_max_hz,
                         )
-                        nw_mt = _multitaper_band_dof(
-                            mt_w.freqs_hz,
-                            k_tapers=mt_w.K_tapers,
-                            nw=req.nw,
-                            spectrum_type=req.spectrum_type,
+                        nw_mt = max(
+                            2.0,
+                            multitaper_effective_dof(
+                                mt_w.N,
+                                NW=req.nw,
+                                K_tapers=mt_w.K_tapers,
+                                dt=DT_1MIN_SEC,
+                                band=req.band,
+                                spectrum_type=req.spectrum_type,
+                                t_max_pc6_sec=req.t_max_pc6_sec,
+                                f_min_hz=req.f_min_hz,
+                                f_max_hz=req.f_max_hz,
+                            ),
                         )
                         st_w = stokes_from_spectral_matrix_2d(
                             mt_w.S, n_eff=nw_mt, alpha=req.alpha

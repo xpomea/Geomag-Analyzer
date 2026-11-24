@@ -290,6 +290,7 @@ def cross_welch_matrix(
         alpha=req.alpha,
         min_common_segments=req.min_common_segments,
         spectrum_type=req.spectrum_type,
+        window_index=req.window_index,
     )
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
     win_ts = timestamps_to_iso(ref_ts[mat.window_center_indices])
@@ -368,6 +369,7 @@ def cross_welch_flr(
         alpha=req.alpha,
         min_common_segments=req.min_common_segments,
         t_max_pc6_sec=req.t_max_pc6_sec,
+        spectrum_type=req.spectrum_type,
     )
     center_idx = int(spectra_chain[0].window_center_indices[req.window_index])
     win_iso = timestamps_to_iso(ref_ts[[center_idx]])[0]

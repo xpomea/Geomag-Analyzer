@@ -2,14 +2,11 @@ import React, { useMemo } from "react";
 import type * as echarts from "echarts";
 import { Activity, AlertTriangle } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { formatUtcFull } from "../../utils/formatters";
 import { extractContiguousRanges } from "../../utils/masking";
-import {
-  CHART_GRID_LEFT,
-  CHART_GRID_RIGHT,
-  computeCursorOverlayPercent,
-  useSyncedEChart,
-} from "./useSyncedEChart";
+import { CursorOverlayLine } from "./CursorOverlayLine";
+import { CHART_GRID_LEFT, CHART_GRID_RIGHT, useSyncedEChart } from "./useSyncedEChart";
 
 function centeredDelta(arr: (number | null)[]): (number | null)[] {
   let sum = 0;
@@ -34,6 +31,7 @@ export const MagnetogramPanel: React.FC = () => {
     episodeBoundsMs,
     loadingPolarization,
   } = useAnalysis();
+  const { setCursorUtcMs } = useCursor();
 
   const isVariantB = state.method.startsWith("variant_b");
   const hasFiltered = Boolean(isVariantB && polarizationRaw?.filtered);
@@ -54,17 +52,24 @@ export const MagnetogramPanel: React.FC = () => {
     let xPlot: (number | null)[];
     let yPlot: (number | null)[];
     let zPlot: (number | null)[];
-    let envTop: (number | null)[] = [];
+    let envXTop: (number | null)[] = [];
+    let envYTop: (number | null)[] = [];
     let tCutRanges: [number, number][] = [];
+
+    if (isVariantB && polarizationRaw?.filtered) {
+      const flt = polarizationRaw.filtered;
+      const fltTsMs = flt.timestamps_utc.map((t) => Date.parse(t));
+      const trimMask = flt.usable_mask.map((ok) => !ok);
+      tCutRanges = extractContiguousRanges(fltTsMs, trimMask, 60_000);
+    }
 
     if (showFiltered && polarizationRaw?.filtered) {
       const flt = polarizationRaw.filtered;
       xPlot = flt.x_filt;
       yPlot = flt.y_filt;
       zPlot = flt.z_filt;
-      envTop = flt.x_amp;
-      const trimMask = flt.usable_mask.map((ok) => !ok);
-      tCutRanges = extractContiguousRanges(tsMs, trimMask, 60_000);
+      envXTop = flt.x_amp;
+      envYTop = flt.y_amp;
     } else {
       xPlot = centeredDelta(geomag.x_nT);
       yPlot = centeredDelta(geomag.y_nT);
@@ -135,13 +140,22 @@ export const MagnetogramPanel: React.FC = () => {
       },
     ];
 
-    if (showFiltered && envTop.length === tsMs.length) {
+    if (showFiltered && envXTop.length === tsMs.length) {
       series.push({
         name: `Огибающая |Z_${xLabel}|`,
         type: "line",
         showSymbol: false,
         lineStyle: { width: 1.1, color: "rgba(56, 189, 248, 0.55)", type: "dashed" },
-        data: toPairs(envTop),
+        data: toPairs(envXTop),
+      });
+    }
+    if (showFiltered && envYTop.length === tsMs.length) {
+      series.push({
+        name: `Огибающая |Z_${yLabel}|`,
+        type: "line",
+        showSymbol: false,
+        lineStyle: { width: 1.1, color: "rgba(167, 139, 250, 0.55)", type: "dashed" },
+        data: toPairs(envYTop),
       });
     }
 
@@ -203,7 +217,7 @@ export const MagnetogramPanel: React.FC = () => {
       },
       series,
     };
-  }, [geomag, polarizationRaw, showFiltered, state.coordFrame, state.band, episodeBoundsMs]);
+  }, [geomag, polarizationRaw, isVariantB, showFiltered, state.coordFrame, state.band, episodeBoundsMs]);
 
   const { containerRef } = useSyncedEChart({
     option,
@@ -211,10 +225,8 @@ export const MagnetogramPanel: React.FC = () => {
     boundsMs: episodeBoundsMs,
     onViewRangeChange: (rangeMs) =>
       dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs }),
-    onCursorChange: (utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs }),
+    onCursorChange: setCursorUtcMs,
   });
-
-  const cursorFrac = computeCursorOverlayPercent(state.cursorUtcMs, state.viewRangeMs);
 
   return (
     <section className="panel-card">
@@ -268,19 +280,7 @@ export const MagnetogramPanel: React.FC = () => {
         ) : (
           <div style={{ position: "relative", height: 225 }}>
             <div ref={containerRef} className="chart-host" style={{ height: 225 }} />
-            {cursorFrac !== null && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 24,
-                  bottom: 24,
-                  left: `calc(${CHART_GRID_LEFT}px + ${cursorFrac} * (100% - ${CHART_GRID_LEFT + CHART_GRID_RIGHT}px))`,
-                  width: 1,
-                  borderLeft: "1px dashed rgba(56, 189, 248, 0.75)",
-                  pointerEvents: "none",
-                }}
-              />
-            )}
+            <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={24} bottom={24} />
           </div>
         )}
       </div>

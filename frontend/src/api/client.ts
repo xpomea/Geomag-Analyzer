@@ -14,6 +14,8 @@ import type {
   SpaceWeatherResponse,
   WTCJobRequest,
   WTCResultResponse,
+  WelchMatrixRequest,
+  WelchMatrixResponse,
   WelchPairRequest,
   WelchPairResponse,
 } from "./types";
@@ -38,6 +40,7 @@ export class ApiError extends Error {
 }
 
 let sessionToken: string | null = null;
+let authInitPromise: Promise<AuthInitResult> | null = null;
 
 export function setSessionToken(token: string | null): void {
   sessionToken = token;
@@ -45,6 +48,11 @@ export function setSessionToken(token: string | null): void {
 
 export function getSessionToken(): string | null {
   return sessionToken;
+}
+
+export function resetAuthInitForTests(): void {
+  authInitPromise = null;
+  sessionToken = null;
 }
 
 function buildQuery(params: Record<string, string | number | boolean | null | undefined>): string {
@@ -108,13 +116,19 @@ export interface AuthInitResult {
   requireAuth: boolean;
 }
 
-export async function submitBootstrapToken(token: string): Promise<AuthInitResult> {
+async function exchangeBootstrapToken(token: string): Promise<AuthInitResult> {
   const trimmed = token.trim();
   const res = await requestJson<BootstrapResponse>(
     `/api/auth/bootstrap${buildQuery({ token: trimmed })}`,
   );
   setSessionToken(res.session_token);
   return { authenticated: res.authenticated, requireAuth: true };
+}
+
+export async function submitBootstrapToken(token: string): Promise<AuthInitResult> {
+  const res = await exchangeBootstrapToken(token);
+  authInitPromise = res.authenticated ? Promise.resolve(res) : null;
+  return res;
 }
 
 function stripTokenFromUrl(): void {
@@ -130,34 +144,47 @@ function stripTokenFromUrl(): void {
   }
 }
 
-export async function initAuthSession(): Promise<AuthInitResult> {
+export function initAuthSession(): Promise<AuthInitResult> {
+  if (authInitPromise) {
+    return authInitPromise;
+  }
+
   const params = new URLSearchParams(window.location.search);
   const bootstrapTok = params.get("token");
-
   if (bootstrapTok) {
-    try {
-      const res = await submitBootstrapToken(bootstrapTok);
-      stripTokenFromUrl();
-      return res;
-    } catch {
-      stripTokenFromUrl();
-      // Fall through to /api/auth/session in case cookie was already active
-    }
+    stripTokenFromUrl();
   }
 
-  try {
-    const sess = await requestJson<SessionResponse>("/api/auth/session");
-    setSessionToken(sess.session_token ?? null);
-    return {
-      authenticated: sess.authenticated,
-      requireAuth: sess.require_auth,
-    };
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 401) {
-      return { authenticated: false, requireAuth: true };
+  const pending = (async (): Promise<AuthInitResult> => {
+    if (bootstrapTok) {
+      try {
+        return await exchangeBootstrapToken(bootstrapTok);
+      } catch {
+        // Fall through to /api/auth/session in case cookie was already active
+      }
     }
-    throw err;
-  }
+
+    try {
+      const sess = await requestJson<SessionResponse>("/api/auth/session");
+      setSessionToken(sess.session_token ?? null);
+      if (!sess.authenticated && sess.require_auth) {
+        authInitPromise = null;
+      }
+      return {
+        authenticated: sess.authenticated,
+        requireAuth: sess.require_auth,
+      };
+    } catch (err) {
+      authInitPromise = null;
+      if (err instanceof ApiError && err.status === 401) {
+        return { authenticated: false, requireAuth: true };
+      }
+      throw err;
+    }
+  })();
+
+  authInitPromise = pending;
+  return pending;
 }
 
 export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
@@ -232,6 +259,17 @@ export function computeWelchFlr(
   signal?: AbortSignal,
 ): Promise<MeridionalFLRResponse> {
   return requestJson<MeridionalFLRResponse>("/api/cross/welch/flr", {
+    method: "POST",
+    body: JSON.stringify(req),
+    signal,
+  });
+}
+
+export function computeWelchMatrix(
+  req: WelchMatrixRequest,
+  signal?: AbortSignal,
+): Promise<WelchMatrixResponse> {
+  return requestJson<WelchMatrixResponse>("/api/cross/welch/matrix", {
     method: "POST",
     body: JSON.stringify(req),
     signal,

@@ -9,7 +9,7 @@ import type {
   SpectrumType,
 } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
-import { DraftNumberInput } from "./DraftNumberInput";
+import { DraftNullableNumberInput, DraftNumberInput } from "./DraftNumberInput";
 
 const QUICK_PAIRS: { label: string; a: string; b: string }[] = [
   { label: "LVV–BEL", a: "LVV", b: "BEL" },
@@ -17,7 +17,7 @@ const QUICK_PAIRS: { label: string; a: string; b: string }[] = [
   { label: "LVV–OTT", a: "LVV", b: "OTT" },
 ];
 
-export const ControlSidebar: React.FC = () => {
+export const ControlSidebar: React.FC = React.memo(() => {
   const {
     state,
     dispatch,
@@ -231,42 +231,26 @@ export const ControlSidebar: React.FC = () => {
           <div className="field-row">
             <label className="field-label">
               <span>D0 ст. A [°]</span>
-              <input
-                type="number"
-                step="0.1"
-                value={state.externalD0Deg ?? ""}
+              <DraftNullableNumberInput
+                min={-180}
+                max={180}
+                step={0.1}
                 placeholder="Авто"
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === "") {
-                    dispatch({ type: "SET_EXTERNAL_D0", d0Deg: null });
-                    return;
-                  }
-                  const num = Number(raw);
-                  if (Number.isFinite(num)) {
-                    dispatch({ type: "SET_EXTERNAL_D0", d0Deg: num });
-                  }
-                }}
+                value={state.externalD0Deg}
+                ariaLabel="D0 станции A"
+                onCommit={(val) => dispatch({ type: "SET_EXTERNAL_D0", d0Deg: val })}
               />
             </label>
             <label className="field-label">
               <span>D0 ст. B [°]</span>
-              <input
-                type="number"
-                step="0.1"
-                value={state.externalD0DegB ?? ""}
+              <DraftNullableNumberInput
+                min={-180}
+                max={180}
+                step={0.1}
                 placeholder="Авто"
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  if (raw === "") {
-                    dispatch({ type: "SET_EXTERNAL_D0_B", d0Deg: null });
-                    return;
-                  }
-                  const num = Number(raw);
-                  if (Number.isFinite(num)) {
-                    dispatch({ type: "SET_EXTERNAL_D0_B", d0Deg: num });
-                  }
-                }}
+                value={state.externalD0DegB}
+                ariaLabel="D0 станции B"
+                onCommit={(val) => dispatch({ type: "SET_EXTERNAL_D0_B", d0Deg: val })}
               />
             </label>
           </div>
@@ -355,6 +339,7 @@ export const ControlSidebar: React.FC = () => {
           >
             <span>
               L·Δt ({state.L * 60} с) &lt; 4·T_max ({4 * state.tMaxPc6Sec} с) (§5.2)
+              {state.method !== "welch" ? " (для Уэлча / спектрогр.)" : ""}
             </span>
             <button
               type="button"
@@ -536,4 +521,4 @@ export const ControlSidebar: React.FC = () => {
       </section>
     </aside>
   );
-};
+});

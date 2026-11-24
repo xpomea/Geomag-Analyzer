@@ -143,6 +143,8 @@ def submit_wtc_job(
         "coord_frame": canon_frame,
         "d0_deg_i": float(d0_deg_i),
         "d0_deg_j": float(d0_deg_j),
+        "external_d0_deg_i": req.external_d0_deg_i,
+        "external_d0_deg_j": req.external_d0_deg_j,
         "period_min_sec": float(req.period_min_sec),
         "period_max_sec": float(req.period_max_sec),
         "dj": float(req.dj),
@@ -157,8 +159,38 @@ def submit_wtc_job(
         "core_version": gc.__version__,
         "canonical_cache_params": canonical_cache_params,
     }
+    reverse_cache_key: str | None = None
+    if data_i.station_iaga != data_j.station_iaga:
+        rev_qc_params = {
+            "d0_deg_i": round(float(d0_deg_j), 6),
+            "d0_deg_j": round(float(d0_deg_i), 6),
+            "start_utc": req.start_utc,
+            "end_utc": req.end_utc,
+            "min_subsegment_samples": int(req.min_subsegment_samples),
+        }
+        reverse_cache_key = build_wtc_cache_key(
+            gc.__version__,
+            episode_id=req.episode_id,
+            pair=(data_j.station_iaga, data_i.station_iaga),
+            component=req.component,
+            coord_frame=canon_frame,
+            d0_deg=d0_deg_j,
+            period_min_sec=req.period_min_sec,
+            period_max_sec=req.period_max_sec,
+            dj=req.dj,
+            omega0=req.omega0,
+            gap_policy=req.gap_policy,
+            n_surrogates=req.n_surrogates,
+            alpha=req.alpha,
+            seed=req.seed,
+            qc_params=rev_qc_params,
+        )
 
-    job = job_manager.submit_wtc_job(params=worker_params, cache_key=cache_key)
+    job = job_manager.submit_wtc_job(
+        params=worker_params,
+        cache_key=cache_key,
+        reverse_cache_key=reverse_cache_key,
+    )
     return JobStatusResponse(**job)
 
 
@@ -226,6 +258,20 @@ def get_wtc_job_result(
     )
     ts_iso = timestamps_to_iso(data_i.timestamps_utc[::stride])
     sl = slice(None, None, stride)
+    n_out = len(ts_iso)
+    scaled_subsegments: list[list[int]] = []
+    for s_orig, e_orig in wtc.subsegments:
+        s_st = (int(s_orig) + stride - 1) // stride
+        e_st = min(n_out, (int(e_orig) + stride - 1) // stride)
+        if e_st > s_st:
+            scaled_subsegments.append([s_st, e_st])
+
+    phase_negated = bool(params.get("phase_negated", False))
+    xwt_ph_arr = wtc.xwt_phase_deg[:, sl]
+    wtc_ph_arr = wtc.wtc_phase_deg[:, sl]
+    if phase_negated:
+        xwt_ph_arr = np.where(np.isfinite(xwt_ph_arr), -xwt_ph_arr, np.nan)
+        wtc_ph_arr = np.where(np.isfinite(wtc_ph_arr), -wtc_ph_arr, np.nan)
 
     return WTCResultResponse(
         job_id=job["job_id"],
@@ -241,15 +287,15 @@ def get_wtc_job_result(
         coi_periods_sec=to_json_list(wtc.coi_periods_sec[sl]),
         inside_coi=to_json_list(wtc.inside_coi[:, sl]),
         xwt_power=to_json_list(wtc.xwt_power[:, sl]),
-        xwt_phase_deg=to_json_list(wtc.xwt_phase_deg[:, sl]),
+        xwt_phase_deg=to_json_list(xwt_ph_arr),
         wtc_r2=to_json_list(wtc.wtc_r2[:, sl]),
-        wtc_phase_deg=to_json_list(wtc.wtc_phase_deg[:, sl]),
+        wtc_phase_deg=to_json_list(wtc_ph_arr),
         wtc_sig95=to_json_list(wtc.wtc_sig95) if wtc.wtc_sig95 is not None else None,
         wtc_is_significant=to_json_list(wtc.wtc_is_significant[:, sl]),
-        alpha1_i=float(wtc.alpha1_i),
-        alpha1_j=float(wtc.alpha1_j),
+        alpha1_i=float(wtc.alpha1_j) if phase_negated else float(wtc.alpha1_i),
+        alpha1_j=float(wtc.alpha1_i) if phase_negated else float(wtc.alpha1_j),
         gap_policy=wtc.gap_policy,
-        subsegments=[[int(s), int(e)] for s, e in wtc.subsegments],
+        subsegments=scaled_subsegments,
         n_surrogates=int(wtc.n_surrogates),
         alpha=float(wtc.alpha),
     )

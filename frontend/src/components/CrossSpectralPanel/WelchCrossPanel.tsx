@@ -3,12 +3,13 @@ import * as echarts from "echarts";
 import { ArrowLeftRight, ChevronDown, ChevronUp, Database, GitBranch } from "lucide-react";
 import type { CrossComponent } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { useCursor } from "../../store/CursorContext";
 import { formatNum, formatUtcFull } from "../../utils/formatters";
+import { CursorOverlayLine } from "../SyncedCharts/CursorOverlayLine";
 import { ScientificHeatmap2D, type BandGuide } from "../SyncedCharts/ScientificHeatmap2D";
 import {
   CHART_GRID_LEFT,
   CHART_GRID_RIGHT,
-  computeCursorOverlayPercent,
   useSyncedEChart,
 } from "../SyncedCharts/useSyncedEChart";
 
@@ -26,6 +27,7 @@ export const WelchCrossPanel: React.FC = () => {
     flrError,
     loadFlrAtCursor,
   } = useAnalysis();
+  const { setCursorUtcMs } = useCursor();
 
   const [tfMode, setTfMode] = useState<"coherence" | "phase">("coherence");
   const [flrOpen, setFlrOpen] = useState(false);
@@ -183,7 +185,7 @@ export const WelchCrossPanel: React.FC = () => {
     boundsMs: episodeBoundsMs,
     onViewRangeChange: (rangeMs) =>
       dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs }),
-    onCursorChange: (utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs }),
+    onCursorChange: setCursorUtcMs,
   });
 
   // Separate non-time ECharts chart for Meridional FLR profile (callback-ref safe)
@@ -267,8 +269,6 @@ export const WelchCrossPanel: React.FC = () => {
     [],
   );
 
-  const cursorFrac = computeCursorOverlayPercent(state.cursorUtcMs, state.viewRangeMs);
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div
@@ -349,19 +349,7 @@ export const WelchCrossPanel: React.FC = () => {
       {option1D && (
         <div style={{ position: "relative", height: 224 }}>
           <div ref={containerRef} className="chart-host" style={{ height: 224 }} />
-          {cursorFrac !== null && (
-            <div
-              style={{
-                position: "absolute",
-                top: 18,
-                bottom: 24,
-                left: `calc(${CHART_GRID_LEFT}px + ${cursorFrac} * (100% - ${CHART_GRID_LEFT + CHART_GRID_RIGHT}px))`,
-                width: 1,
-                borderLeft: "1px dashed rgba(56, 189, 248, 0.75)",
-                pointerEvents: "none",
-              }}
-            />
-          )}
+          <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={18} bottom={24} />
         </div>
       )}
 
@@ -414,8 +402,7 @@ export const WelchCrossPanel: React.FC = () => {
             onViewRangeChange={(rangeMs) =>
               dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs })
             }
-            cursorUtcMs={state.cursorUtcMs}
-            onCursorChange={(utcMs) => dispatch({ type: "SET_CURSOR_UTC", utcMs })}
+            onCursorChange={setCursorUtcMs}
             bandGuidesY={bandGuides}
             height={210}
           />
@@ -477,6 +464,7 @@ export const WelchCrossPanel: React.FC = () => {
           <div style={{ marginTop: 8 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
               <span className="pill pill-accent mono">Окно: {flrProfile.window_timestamp_utc}</span>
+              <span className="pill mono">α = {state.alpha}</span>
               <span className="pill pill-ok mono">
                 Пик амплитуды: {flrProfile.peak_station} ({formatNum(flrProfile.peak_latitude_deg, 2)}°N)
               </span>

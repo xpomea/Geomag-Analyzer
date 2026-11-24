@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { PolarizationResponse, WelchPairResponse } from "../../api/types";
-import { applyPolarizationAlphaMask, applyWelchAlphaMask } from "../masking";
+import type { MeridionalFLRResponse, PolarizationResponse, WelchPairResponse } from "../../api/types";
+import { applyFlrAlphaMask, applyPolarizationAlphaMask, applyWelchAlphaMask } from "../masking";
 import { gamma2Crit, pCrit } from "../thresholds";
 
 function buildSyntheticPolarization(nWin = 6): PolarizationResponse {
@@ -226,5 +226,39 @@ describe("client dynamic alpha masking (p < p_crit & gamma2 < gamma2_crit)", () 
     expect(at10.azimuthalMMasked[0]).toBeCloseTo(17, 6);
     expect(at10.azimuthalMMasked[1]).toBeCloseTo(19, 6);
     expect(at10.azimuthalMMasked[2]).toBeCloseTo(21, 6);
+  });
+
+  it("remasks FLR cumulative phase and critical coherence when alpha changes", () => {
+    const gc05 = gamma2Crit(45, 0.05); // ~0.0658
+    // Link 0: 0.25 (always sig); Link 1: 0.08 (sig at 0.05 & 0.10, masked at 0.01 where crit~0.0994)
+    const flr: MeridionalFLRResponse = {
+      episode_id: "storm_20261009_11",
+      band: "Pc5",
+      window_timestamp_utc: "2026-10-10T06:00:00Z",
+      station_codes: ["LVV", "BEL", "NUR"],
+      latitudes_deg: [49.9, 51.84, 60.51],
+      band_power: [10, 12, 8],
+      amplitude: [3.16, 3.46, 2.83],
+      pair_coherence: [0.25, 0.08],
+      pair_gamma2_crit: [gc05, gc05],
+      pair_phase_deg: [-20, -30],
+      pair_is_significant: [true, true],
+      cumulative_phase_deg: [0, 20, 50],
+      phase_gradient_deg_per_lat: [20 / 1.94, 30 / 8.67],
+      peak_station: "BEL",
+      peak_latitude_deg: 51.84,
+    };
+
+    const at05 = applyFlrAlphaMask(flr, 0.05, 0.05);
+    expect(at05.pair_is_significant).toEqual([true, true]);
+    expect(at05.cumulative_phase_deg).toEqual([0, 20, 50]);
+
+    const at01 = applyFlrAlphaMask(flr, 0.01, 0.05);
+    expect(at01.pair_is_significant).toEqual([true, false]);
+    expect(at01.cumulative_phase_deg[0]).toBe(0);
+    expect(at01.cumulative_phase_deg[1]).toBe(20);
+    expect(at01.cumulative_phase_deg[2]).toBeNull();
+    expect(at01.phase_gradient_deg_per_lat[0]).not.toBeNull();
+    expect(at01.phase_gradient_deg_per_lat[1]).toBeNull();
   });
 });

@@ -2,11 +2,42 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MIN_ZOOM_SPAN_MS } from "../../store/analysisReducer";
 import { buildColorLut, extractSignificanceContours, type ColormapName } from "../../utils/contours";
 import { formatUtcFull, formatUtcShort } from "../../utils/formatters";
+import { CursorOverlayLine } from "./CursorOverlayLine";
 import {
   CHART_GRID_LEFT,
   CHART_GRID_RIGHT,
   computeCursorOverlayPercent,
 } from "./useSyncedEChart";
+
+export function computeVisibleArrowStepX(visibleCount: number, explicitStepX?: number): number {
+  if (explicitStepX !== undefined && explicitStepX >= 1) {
+    return Math.round(explicitStepX);
+  }
+  return Math.max(1, Math.floor(Math.max(1, visibleCount) / 32));
+}
+
+export function findNearestYIndex(
+  yValues: number[],
+  targetY: number,
+  yScaleMode: "linear" | "log",
+): number {
+  if (yValues.length === 0) return 0;
+  let nearestY = 0;
+  let minYDiff = Number.POSITIVE_INFINITY;
+  const logTarget = yScaleMode === "log" ? Math.log10(Math.max(1e-12, targetY)) : 0;
+  for (let j = 0; j < yValues.length; j++) {
+    const val = yValues[j];
+    const d =
+      yScaleMode === "log"
+        ? Math.abs(Math.log10(Math.max(1e-12, val)) - logTarget)
+        : Math.abs(val - targetY);
+    if (d < minYDiff) {
+      minYDiff = d;
+      nearestY = j;
+    }
+  }
+  return nearestY;
+}
 
 export interface BandGuide {
   value: number;
@@ -31,7 +62,7 @@ export interface ScientificHeatmap2DProps {
   viewRangeMs: [number, number] | null;
   boundsMs: [number, number] | null;
   onViewRangeChange: (range: [number, number]) => void;
-  cursorUtcMs: number | null;
+  cursorUtcMs?: number | null;
   onCursorChange?: (utcMs: number) => void;
   bandGuidesY?: BandGuide[];
   coiPeriods?: (number | null)[];
@@ -452,14 +483,21 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
 
     // Optional phase arrows (0 deg -> right/in-phase, 90 deg -> up, 180 deg -> left)
     if (phaseVectors && nTime > 0 && nY > 0) {
-      const stepX = phaseVectors.stepX ?? Math.max(4, Math.floor(nTime / 36));
+      let firstVisIdx = 0;
+      while (firstVisIdx < nTime && timesMs[firstVisIdx] < vStart) firstVisIdx++;
+      let lastVisIdx = nTime - 1;
+      while (lastVisIdx >= 0 && timesMs[lastVisIdx] > vEnd) lastVisIdx--;
+      const visibleCount = Math.max(0, lastVisIdx - firstVisIdx + 1);
+      const stepX = computeVisibleArrowStepX(visibleCount, phaseVectors.stepX);
       const stepY = phaseVectors.stepY ?? Math.max(2, Math.floor(nY / 14));
       const arrowLen = 7;
       ctx.strokeStyle = "rgba(255, 255, 255, 0.88)";
       ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
       ctx.lineWidth = 1.2;
 
-      for (let tIdx = 0; tIdx < nTime; tIdx += stepX) {
+      const startT = Math.floor(firstVisIdx / stepX) * stepX;
+      for (let tIdx = startT; tIdx <= lastVisIdx; tIdx += stepX) {
+        if (tIdx < firstVisIdx) continue;
         const tMs = timesMs[tIdx];
         if (tMs < vStart || tMs > vEnd) continue;
         const cx = plotLeft + ((tMs - vStart) / spanMs) * plotW;
@@ -658,15 +696,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
         nearestT = i;
       }
     }
-    let nearestY = 0;
-    let minYDiff = Number.POSITIVE_INFINITY;
-    for (let j = 0; j < yValues.length; j++) {
-      const d = Math.abs(yValues[j] - yVal);
-      if (d < minYDiff) {
-        minYDiff = d;
-        nearestY = j;
-      }
-    }
+    const nearestY = findNearestYIndex(yValues, yVal, yScaleMode);
 
     const raw =
       matrixLayout === "time-by-y"
@@ -694,7 +724,8 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     dragRef.current = null;
   };
 
-  const cursorFrac = computeCursorOverlayPercent(cursorUtcMs, effectiveRange);
+  const explicitCursorFrac =
+    cursorUtcMs !== undefined ? computeCursorOverlayPercent(cursorUtcMs, effectiveRange) : null;
 
   return (
     <div
@@ -710,17 +741,26 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       }}
     >
       <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
-      {cursorFrac !== null && (
-        <div
-          style={{
-            position: "absolute",
-            top: plotTop,
-            height: plotH,
-            left: `calc(${CHART_GRID_LEFT}px + ${cursorFrac} * (100% - ${CHART_GRID_LEFT + CHART_GRID_RIGHT}px))`,
-            width: 1,
-            borderLeft: "1px dashed rgba(56, 189, 248, 0.9)",
-            pointerEvents: "none",
-          }}
+      {cursorUtcMs !== undefined ? (
+        explicitCursorFrac !== null && (
+          <div
+            style={{
+              position: "absolute",
+              top: plotTop,
+              height: plotH,
+              left: `calc(${CHART_GRID_LEFT}px + ${explicitCursorFrac} * (100% - ${CHART_GRID_LEFT + CHART_GRID_RIGHT}px))`,
+              width: 1,
+              borderLeft: "1px dashed rgba(56, 189, 248, 0.9)",
+              pointerEvents: "none",
+            }}
+          />
+        )
+      ) : (
+        <CursorOverlayLine
+          viewRangeMs={effectiveRange}
+          top={plotTop}
+          height={plotH}
+          borderColor="rgba(56, 189, 248, 0.9)"
         />
       )}
       {hoverInfo && (

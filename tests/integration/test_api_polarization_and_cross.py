@@ -208,24 +208,55 @@ def test_cross_welch_pair_matrix_and_flr_with_phase1_cache(api_client):
     assert all(m2["cache_hits"].values())
     assert m2["elapsed_ms"] < 2000.0
 
-    # Meridional FLR profile along European chain
-    r_flr = client.post(
-        "/api/cross/welch/flr",
-        headers=headers,
-        json={
-            "episode_id": "storm_20261009_11",
-            "station_chain": ["HRN", "ABK", "KIR", "LYC", "BEL", "LVV", "PAG"],
-            "component": "X",
-            "band": "Pc5",
-            "window_samples": 360,
-            "step_samples": 120,
-            "window_index": 5,
-        },
+    # Matrix single window_index slice + gzip compression
+    rm_slice = client.post(
+        "/api/cross/welch/matrix",
+        headers={**headers, "Accept-Encoding": "gzip"},
+        json={**mat_req, "window_index": 3},
     )
+    assert rm_slice.status_code == 200
+    assert rm_slice.headers.get("content-encoding") == "gzip"
+    ms_data = rm_slice.json()
+    assert len(ms_data["window_timestamps_utc"]) == 1
+    assert ms_data["window_timestamps_utc"][0] == m2["window_timestamps_utc"][3]
+    assert ms_data["gamma2"][0] == m2["gamma2"][3]
+    assert (
+        client.post(
+            "/api/cross/welch/matrix",
+            headers=headers,
+            json={**mat_req, "window_index": 9999},
+        ).status_code
+        == 422
+    )
+
+    # Meridional FLR profile along European chain (flat vs red spectrum_type)
+    flr_base = {
+        "episode_id": "storm_20261009_11",
+        "station_chain": ["HRN", "ABK", "KIR", "LYC", "BEL", "LVV", "PAG"],
+        "component": "X",
+        "band": "Pc5",
+        "window_samples": 360,
+        "step_samples": 120,
+        "window_index": 5,
+    }
+    r_flr = client.post("/api/cross/welch/flr", headers=headers, json=flr_base)
     assert r_flr.status_code == 200, r_flr.text
     flr = r_flr.json()
     assert flr["peak_station"] in {"HRN", "ABK", "KIR", "LYC", "BEL", "LVV", "PAG"}
     assert math.isfinite(flr["peak_latitude_deg"])
+
+    r_flr_red = client.post(
+        "/api/cross/welch/flr",
+        headers=headers,
+        json={**flr_base, "spectrum_type": "red"},
+    )
+    assert r_flr_red.status_code == 200
+    flr_red = r_flr_red.json()
+    assert all(
+        r_c > f_c
+        for r_c, f_c in zip(flr_red["pair_gamma2_crit"], flr["pair_gamma2_crit"], strict=True)
+        if r_c is not None and f_c is not None
+    )
 
     # Component / coord_frame mismatch -> 422 across Welch endpoints
     assert (

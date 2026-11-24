@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -168,9 +169,16 @@ def _smooth_scale_boxcar_numpy(arr_2d: np.ndarray, width: float) -> np.ndarray:
     return out
 
 
+def _should_enable_numba_cache() -> bool:
+    """Disable Numba disk cache in frozen PyInstaller bundles lacking .py locators."""
+    return not bool(getattr(sys, "frozen", False))
+
+
+_NUMBA_CACHE = _should_enable_numba_cache()
+
 if HAS_NUMBA:
 
-    @_numba.njit(cache=True)
+    @_numba.njit(cache=_NUMBA_CACHE)
     def _smooth_scale_boxcar_numba(arr_2d: np.ndarray, width: float) -> np.ndarray:
         n_scales, n_cols = arr_2d.shape
         out = np.empty((n_scales, n_cols), dtype=np.float64)
@@ -212,7 +220,7 @@ if HAS_NUMBA:
                 out[i, j] = acc * inv_w
         return out
 
-    @_numba.njit(cache=True)
+    @_numba.njit(cache=_NUMBA_CACHE)
     def _generate_ar1_numba(noise_2d: np.ndarray, alpha: float) -> np.ndarray:
         n_rows, n_cols = noise_2d.shape
         out = np.empty((n_rows, n_cols), dtype=np.float64)
