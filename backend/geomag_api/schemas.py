@@ -159,6 +159,7 @@ class PolarizationRequest(BaseModel):
     include_3d: bool = True
     include_dynamic: bool = True
     include_filtered: bool = False
+    include_spectrogram: bool = False
     L: int = Field(default=128, ge=16)
     M: int = Field(default=64, ge=1)
     window_samples: int = Field(default=360, ge=32)
@@ -215,6 +216,8 @@ class DynamicPolarizationOut(BaseModel):
     chi_deg: list[float | None]
     epsilon: list[float | None]
     gamma2: list[float | None]
+    gamma2_crit: list[float | None] = Field(default_factory=list)
+    n_eff: list[float | None] = Field(default_factory=list)
     is_significant_p: list[bool]
     is_valid: list[bool]
 
@@ -229,6 +232,14 @@ class FilteredSeriesOut(BaseModel):
     usable_mask: list[bool]
 
 
+class SpectrogramOut(BaseModel):
+    timestamps_utc: list[str]
+    freqs_hz: list[float]
+    power_total: list[list[float | None]]
+    power_x: list[list[float | None]]
+    power_y: list[list[float | None]]
+
+
 class PolarizationResponse(BaseModel):
     episode_id: str
     station_iaga: str
@@ -238,10 +249,12 @@ class PolarizationResponse(BaseModel):
     d0_deg: float
     is_valid: bool
     n_eff: float | None = None
+    trim_hours: float | None = None
     stokes_2d: Stokes2DOut | None = None
     pol_3d: Polarization3DOut | None = None
     dynamic: DynamicPolarizationOut | None = None
     filtered: FilteredSeriesOut | None = None
+    spectrogram: SpectrogramOut | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -328,6 +341,7 @@ class WelchPairResponse(BaseModel):
     is_valid: list[bool]
     gamma2_tf: list[list[float | None]]
     gamma2_crit_tf: list[float | None]
+    phase_deg_tf: list[list[float | None]] = Field(default_factory=list)
     phase_deg_tf_masked: list[list[float | None]]
     azimuthal: AzimuthalOut | None = None
     warnings: list[str] = Field(default_factory=list)

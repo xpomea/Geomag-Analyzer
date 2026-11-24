@@ -6,14 +6,17 @@ import numpy as np
 from fastapi import APIRouter
 
 from geomag_core import (
+    DT_1MIN_SEC,
     Polarization3D,
     Stokes2D,
     aggregate_spectral_matrices,
     compute_multitaper_spectral_matrix,
+    compute_station_phase1_spectra,
     compute_welch_spectral_matrix,
     effective_n_formula48,
     find_valid_subsegments,
     is_window_valid,
+    periodic_hann_window,
     polarization_3d,
     run_variant_b_pipeline,
     spectral_matrix_from_analytic,
@@ -31,6 +34,7 @@ from .schemas import (
     Polarization3DOut,
     PolarizationRequest,
     PolarizationResponse,
+    SpectrogramOut,
     Stokes2DOut,
 )
 from .serializers import timestamps_to_iso, to_json_float, to_json_list
@@ -85,8 +89,87 @@ def _empty_dynamic_out() -> DynamicPolarizationOut:
         chi_deg=[],
         epsilon=[],
         gamma2=[],
+        gamma2_crit=[],
+        n_eff=[],
         is_significant_p=[],
         is_valid=[],
+    )
+
+
+def _compute_station_spectrogram(
+    xyz: np.ndarray,
+    timestamps_utc,
+    is_valid_xyz: np.ndarray,
+    *,
+    station_iaga: str,
+    L: int,
+    M: int,
+    window_samples: int,
+    step_samples: int,
+) -> SpectrogramOut:
+    """Compute calibrated one-sided dynamic Welch PSD spectrogram Sxx(t,f), Syy(t,f)."""
+    n_samples = xyz.shape[0]
+    if n_samples < window_samples or window_samples < L:
+        return SpectrogramOut(
+            timestamps_utc=[],
+            freqs_hz=[],
+            power_total=[],
+            power_x=[],
+            power_y=[],
+        )
+
+    sp_x = compute_station_phase1_spectra(
+        xyz[:, 0],
+        station_iaga=station_iaga,
+        component="X",
+        L=L,
+        M=M,
+        window_samples=window_samples,
+        step_samples=step_samples,
+        is_valid=is_valid_xyz,
+    )
+    sp_y = compute_station_phase1_spectra(
+        xyz[:, 1],
+        station_iaga=station_iaga,
+        component="Y",
+        L=L,
+        M=M,
+        window_samples=window_samples,
+        step_samples=step_samples,
+        is_valid=is_valid_xyz,
+    )
+    freqs = sp_x.freqs_hz
+    win = periodic_hann_window(L)
+    u_norm = float(np.sum(win ** 2))
+    scale = np.full(freqs.shape, 2.0 * DT_1MIN_SEC / u_norm, dtype=np.float64)
+    scale[0] = DT_1MIN_SEC / u_norm
+    if L % 2 == 0:
+        scale[-1] = DT_1MIN_SEC / u_norm
+
+    f_mask = freqs > 0.0
+    pos_freqs = freqs[f_mask]
+    pos_scale = scale[f_mask]
+
+    valid = sp_x.valid_segments & sp_y.valid_segments
+    k_valid = np.sum(valid, axis=1, dtype=np.int64)
+    fx = np.where(valid[:, :, None], np.abs(sp_x.F[:, :, f_mask]) ** 2, 0.0)
+    fy = np.where(valid[:, :, None], np.abs(sp_y.F[:, :, f_mask]) ** 2, 0.0)
+    sum_x = np.sum(fx, axis=1)
+    sum_y = np.sum(fy, axis=1)
+
+    px = np.full(sum_x.shape, np.nan, dtype=np.float64)
+    py = np.full(sum_y.shape, np.nan, dtype=np.float64)
+    ok = k_valid > 0
+    px[ok] = (sum_x[ok] / k_valid[ok, None]) * pos_scale[None, :]
+    py[ok] = (sum_y[ok] / k_valid[ok, None]) * pos_scale[None, :]
+    ptot = px + py
+
+    return SpectrogramOut(
+        timestamps_utc=timestamps_to_iso(timestamps_utc[sp_x.window_center_indices]),
+        freqs_hz=to_json_list(pos_freqs),
+        power_total=to_json_list(ptot),
+        power_x=to_json_list(px),
+        power_y=to_json_list(py),
     )
 
 
@@ -184,6 +267,7 @@ def compute_polarization(
                     [],
                     [],
                 )
+                g2crit_vals, neff_vals = [], []
                 sig_flags, valid_flags = [], []
                 for s in starts:
                     e = s + req.window_samples
@@ -222,6 +306,8 @@ def compute_polarization(
                         chi_vals.append(to_json_float(st_w.chi_deg))
                         eps_vals.append(to_json_float(st_w.epsilon))
                         g2_vals.append(to_json_float(st_w.gamma2))
+                        g2crit_vals.append(to_json_float(st_w.gamma2_crit))
+                        neff_vals.append(to_json_float(st_w.n_eff))
                         sig_flags.append(bool(st_w.is_significant_p))
                         valid_flags.append(True)
                     else:
@@ -232,6 +318,8 @@ def compute_polarization(
                         chi_vals.append(None)
                         eps_vals.append(None)
                         g2_vals.append(None)
+                        g2crit_vals.append(None)
+                        neff_vals.append(None)
                         sig_flags.append(False)
                         valid_flags.append(False)
                 dyn_out = DynamicPolarizationOut(
@@ -243,9 +331,26 @@ def compute_polarization(
                     chi_deg=chi_vals,
                     epsilon=eps_vals,
                     gamma2=g2_vals,
+                    gamma2_crit=g2crit_vals,
+                    n_eff=neff_vals,
                     is_significant_p=sig_flags,
                     is_valid=valid_flags,
                 )
+
+        spec_out = (
+            _compute_station_spectrogram(
+                xyz,
+                ts,
+                data.is_valid_xyz,
+                station_iaga=data.station_iaga,
+                L=req.L,
+                M=req.M,
+                window_samples=req.window_samples,
+                step_samples=req.step_samples,
+            )
+            if req.include_spectrogram
+            else None
+        )
 
         return PolarizationResponse(
             episode_id=req.episode_id,
@@ -259,6 +364,7 @@ def compute_polarization(
             stokes_2d=stokes_out,
             pol_3d=pol3_out,
             dynamic=dyn_out,
+            spectrogram=spec_out,
             warnings=warnings,
         )
 
@@ -322,6 +428,7 @@ def compute_polarization(
                     [],
                     [],
                 )
+                g2crit_vals, neff_vals = [], []
                 sig_flags, valid_flags = [], []
                 for s in starts:
                     e = s + req.window_samples
@@ -354,6 +461,8 @@ def compute_polarization(
                         chi_vals.append(to_json_float(st_w.chi_deg))
                         eps_vals.append(to_json_float(st_w.epsilon))
                         g2_vals.append(to_json_float(st_w.gamma2))
+                        g2crit_vals.append(to_json_float(st_w.gamma2_crit))
+                        neff_vals.append(to_json_float(st_w.n_eff))
                         sig_flags.append(bool(st_w.is_significant_p))
                         valid_flags.append(True)
                     else:
@@ -364,6 +473,8 @@ def compute_polarization(
                         chi_vals.append(None)
                         eps_vals.append(None)
                         g2_vals.append(None)
+                        g2crit_vals.append(None)
+                        neff_vals.append(None)
                         sig_flags.append(False)
                         valid_flags.append(False)
                 dyn_out = DynamicPolarizationOut(
@@ -375,9 +486,26 @@ def compute_polarization(
                     chi_deg=chi_vals,
                     epsilon=eps_vals,
                     gamma2=g2_vals,
+                    gamma2_crit=g2crit_vals,
+                    n_eff=neff_vals,
                     is_significant_p=sig_flags,
                     is_valid=valid_flags,
                 )
+
+        spec_out = (
+            _compute_station_spectrogram(
+                xyz,
+                ts,
+                data.is_valid_xyz,
+                station_iaga=data.station_iaga,
+                L=req.L,
+                M=req.M,
+                window_samples=req.window_samples,
+                step_samples=req.step_samples,
+            )
+            if req.include_spectrogram
+            else None
+        )
 
         return PolarizationResponse(
             episode_id=req.episode_id,
@@ -391,6 +519,7 @@ def compute_polarization(
             stokes_2d=stokes_out,
             pol_3d=pol3_out,
             dynamic=dyn_out,
+            spectrogram=spec_out,
             warnings=warnings,
         )
 
@@ -423,6 +552,7 @@ def compute_polarization(
             coord_frame=canon_frame,
             d0_deg=float(d0_deg),
             is_valid=False,
+            trim_hours=float(vb.trim_hours),
             dynamic=_empty_dynamic_out() if req.include_dynamic else None,
             warnings=warnings,
         )
@@ -463,6 +593,7 @@ def compute_polarization(
                 [],
                 [],
             )
+            g2crit_vals, neff_vals = [], []
             sig_flags, valid_flags = [], []
             for s in starts:
                 os_s = s * vb.oversample_m
@@ -484,6 +615,8 @@ def compute_polarization(
                     chi_vals.append(to_json_float(st_w.chi_deg))
                     eps_vals.append(to_json_float(st_w.epsilon))
                     g2_vals.append(to_json_float(st_w.gamma2))
+                    g2crit_vals.append(to_json_float(st_w.gamma2_crit))
+                    neff_vals.append(to_json_float(st_w.n_eff))
                     sig_flags.append(bool(st_w.is_significant_p))
                     valid_flags.append(True)
                 else:
@@ -494,6 +627,8 @@ def compute_polarization(
                     chi_vals.append(None)
                     eps_vals.append(None)
                     g2_vals.append(None)
+                    g2crit_vals.append(None)
+                    neff_vals.append(None)
                     sig_flags.append(False)
                     valid_flags.append(False)
             dyn_out = DynamicPolarizationOut(
@@ -505,6 +640,8 @@ def compute_polarization(
                 chi_deg=chi_vals,
                 epsilon=eps_vals,
                 gamma2=g2_vals,
+                gamma2_crit=g2crit_vals,
+                n_eff=neff_vals,
                 is_significant_p=sig_flags,
                 is_valid=valid_flags,
             )
@@ -525,6 +662,21 @@ def compute_polarization(
             usable_mask=to_json_list(m_1m),
         )
 
+    spec_out = (
+        _compute_station_spectrogram(
+            xyz,
+            ts,
+            data.is_valid_xyz,
+            station_iaga=data.station_iaga,
+            L=req.L,
+            M=req.M,
+            window_samples=req.window_samples,
+            step_samples=req.step_samples,
+        )
+        if req.include_spectrogram
+        else None
+    )
+
     return PolarizationResponse(
         episode_id=req.episode_id,
         station_iaga=data.station_iaga,
@@ -534,10 +686,12 @@ def compute_polarization(
         d0_deg=float(d0_deg),
         is_valid=True,
         n_eff=to_json_float(vb.n_eff),
+        trim_hours=float(vb.trim_hours),
         stokes_2d=stokes_out,
         pol_3d=pol3_out,
         dynamic=dyn_out,
         filtered=filtered_out,
+        spectrogram=spec_out,
         warnings=warnings,
     )
 

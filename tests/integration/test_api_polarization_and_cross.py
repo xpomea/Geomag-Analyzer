@@ -21,6 +21,7 @@ def test_polarization_all_methods_real_stations_and_incomplete_handling(api_clie
                 "include_3d": True,
                 "include_dynamic": True,
                 "include_filtered": method.startswith("variant_b"),
+                "include_spectrogram": method == "welch",
                 "step_samples": 120,
             },
         )
@@ -33,8 +34,19 @@ def test_polarization_all_methods_real_stations_and_incomplete_handling(api_clie
         assert data["pol_3d"] is not None
         assert 0.0 <= data["pol_3d"]["P"] <= 1.0
         assert len(data["dynamic"]["timestamps_utc"]) > 20
+        assert len(data["dynamic"]["n_eff"]) == len(data["dynamic"]["timestamps_utc"])
+        assert len(data["dynamic"]["gamma2_crit"]) == len(data["dynamic"]["timestamps_utc"])
+        assert any(v is not None and v > 1.0 for v in data["dynamic"]["n_eff"])
+        if method == "welch":
+            spec = data["spectrogram"]
+            assert spec is not None
+            assert len(spec["timestamps_utc"]) == len(data["dynamic"]["timestamps_utc"])
+            assert len(spec["freqs_hz"]) > 10
+            assert all(f > 0.0 for f in spec["freqs_hz"])
+            assert len(spec["power_total"]) == len(spec["timestamps_utc"])
         if method.startswith("variant_b"):
             assert len(data["filtered"]["x_filt"]) == 4320
+            assert data["trim_hours"] == 3.0
         else:
             assert data["filtered"] is None
 
@@ -119,6 +131,8 @@ def test_cross_welch_pair_matrix_and_flr_with_phase1_cache(api_client):
     assert p1["available"] is True
     assert p1["cache_hits"] == {"LVV": False, "BEL": False}
     assert any(p1["is_significant"])
+    assert len(p1["phase_deg_tf"]) == len(p1["window_timestamps_utc"])
+    assert len(p1["phase_deg_tf"][0]) == len(p1["freqs_hz"])
     assert abs(p1["azimuthal"]["delta_lon_deg"]) > 3.0
 
     # Second call must reuse Phase 1 NPZ cache from user_cache
