@@ -1,0 +1,174 @@
+"""FastAPI application factory, lifespan wiring, auth endpoints, and static bundle serving."""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Query, Request, Response
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+import geomag_core as gc
+
+from . import (
+    routes_catalog,
+    routes_cross,
+    routes_jobs,
+    routes_polarization,
+    routes_timeseries,
+)
+from .cache import CacheManager
+from .config import ApiSettings
+from .data_store import DataStore, NotFoundError
+from .deps import AuthDep, SettingsDep, StoreDep
+from .jobs import JobManager, TooManyJobsError
+from .schemas import BootstrapResponse, HealthResponse, SessionResponse, ShutdownResponse
+from .security import (
+    SESSION_COOKIE_NAME,
+    AuthState,
+    HostOriginCSRFMiddleware,
+    consume_bootstrap_token,
+    verify_session_cookie,
+)
+
+
+def create_app(settings: ApiSettings | None = None) -> FastAPI:
+    """Create configured FastAPI application instance."""
+    cfg = settings if settings is not None else ApiSettings.from_env()
+    auth_state = AuthState(
+        bootstrap_token=cfg.bootstrap_token,
+        session_token=cfg.session_token,
+        session_cookie_value=cfg.session_cookie_value,
+        allowed_hosts=cfg.allowed_hosts,
+        allowed_origins=cfg.allowed_origins,
+        require_auth=cfg.require_auth,
+    )
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        store = DataStore(cfg.processed_dir)
+        cache = CacheManager(
+            static_cache_dir=cfg.static_cache_dir,
+            user_cache_dir=cfg.user_cache_dir,
+            runtime_db_path=cfg.runtime_db_path,
+        )
+        job_manager = JobManager(cfg, cache)
+        application.state.settings = cfg
+        application.state.auth = auth_state
+        application.state.store = store
+        application.state.cache = cache
+        application.state.job_manager = job_manager
+        try:
+            yield
+        finally:
+            job_manager.shutdown()
+
+    application = FastAPI(
+        title="GeoMag Analyzer API",
+        version=gc.__version__,
+        description=(
+            "Pc5/Pc6 geomagnetic polarization, two-phase Welch cross-spectral matrix, "
+            "and XWT/WTC AR(1) Monte Carlo backend."
+        ),
+        lifespan=lifespan,
+    )
+    application.add_middleware(HostOriginCSRFMiddleware, auth=auth_state)
+
+    @application.exception_handler(NotFoundError)
+    async def _not_found_handler(_request: Request, exc: NotFoundError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+
+    @application.exception_handler(TooManyJobsError)
+    async def _too_many_jobs_handler(_request: Request, exc: TooManyJobsError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=429)
+
+    @application.exception_handler(ValueError)
+    async def _value_error_handler(_request: Request, exc: ValueError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    @application.get("/api/health", response_model=HealthResponse, tags=["system"])
+    def health(
+        store: StoreDep,
+        settings_dep: SettingsDep,
+    ) -> HealthResponse:
+        """Liveness and dataset summary endpoint."""
+        return HealthResponse(
+            status="ok",
+            core_version=gc.__version__,
+            catalog_stations=len(store.get_stations()),
+            catalog_episodes=len(store.get_episodes()),
+            require_auth=settings_dep.require_auth,
+        )
+
+    @application.get("/api/auth/bootstrap", response_model=BootstrapResponse, tags=["auth"])
+    def auth_bootstrap(
+        response: Response,
+        auth: AuthDep,
+        token: str = Query(...),
+    ) -> BootstrapResponse | JSONResponse:
+        """Exchange one-time launch token for HttpOnly SameSite=Strict cookie & session token."""
+        if not consume_bootstrap_token(token, auth):
+            return JSONResponse(
+                {"detail": "Invalid or already used bootstrap token"},
+                status_code=401,
+            )
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=auth.session_cookie_value,
+            httponly=True,
+            samesite="strict",
+            secure=False,
+            path="/",
+        )
+        return BootstrapResponse(
+            authenticated=True,
+            session_token=auth.session_token,
+        )
+
+    @application.get("/api/auth/session", response_model=SessionResponse, tags=["auth"])
+    def auth_session(
+        request: Request,
+        auth: AuthDep,
+    ) -> SessionResponse | JSONResponse:
+        """Return session token for authenticated same-origin browser cookie holder."""
+        if not auth.require_auth:
+            return SessionResponse(
+                authenticated=True,
+                session_token=auth.session_token,
+                require_auth=False,
+            )
+        if not verify_session_cookie(request.cookies, auth):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        return SessionResponse(
+            authenticated=True,
+            session_token=auth.session_token,
+            require_auth=True,
+        )
+
+    @application.post("/api/shutdown", response_model=ShutdownResponse, tags=["system"])
+    def shutdown_server(
+        settings_dep: SettingsDep,
+    ) -> ShutdownResponse:
+        """Cleanly shut down worker pool and desktop/browser server instance."""
+        if settings_dep.shutdown_callback is not None:
+            settings_dep.shutdown_callback()
+        return ShutdownResponse(status="shutting_down", message="Server shutdown triggered.")
+
+    application.include_router(routes_catalog.router)
+    application.include_router(routes_timeseries.router)
+    application.include_router(routes_polarization.router)
+    application.include_router(routes_cross.router)
+    application.include_router(routes_jobs.router)
+
+    dist_index = cfg.frontend_dist_dir / "index.html"
+    if dist_index.is_file():
+        application.mount(
+            "/",
+            StaticFiles(directory=str(cfg.frontend_dist_dir), html=True),
+            name="frontend",
+        )
+
+    return application
+
+
+app = create_app()

@@ -1,0 +1,316 @@
+"""Integration tests for Tier 3 WTC jobs, WebSocket/SSE progress, cancel, security, and uvicorn."""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+from starlette.websockets import WebSocketDisconnect
+
+from geomag_etl.config import DEFAULT_PROCESSED_DIR
+
+
+def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
+    shutdown_called = {"flag": False}
+
+    def _on_shutdown() -> None:
+        shutdown_called["flag"] = True
+
+    client, settings = make_test_client(shutdown_callback=_on_shutdown)
+
+    # OpenAPI / Swagger UI must be documented and reachable
+    assert client.get("/docs").status_code == 200
+    openapi = client.get("/openapi.json")
+    assert openapi.status_code == 200
+    assert "/api/jobs/wtc" in openapi.json()["paths"]
+
+    # Bad Host or Origin must return 403
+    assert client.get("/api/health", headers={"Host": "evil.example"}).status_code == 403
+    assert (
+        client.get("/api/health", headers={"Origin": "https://evil.example"}).status_code == 403
+    )
+
+    # Unauthenticated mutation without X-Session-Token -> 401
+    assert (
+        client.post(
+            "/api/polarization",
+            json={"episode_id": "storm_20261004_05", "station_iaga": "BEL"},
+        ).status_code
+        == 401
+    )
+    assert client.post("/api/shutdown").status_code == 401
+
+    # Cookie before bootstrap is unauthorized
+    assert client.get("/api/auth/session").status_code == 401
+
+    # One-time bootstrap succeeds once and fails on reuse
+    boot1 = client.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
+    assert boot1.status_code == 200
+    sess_tok = boot1.json()["session_token"]
+    boot2 = client.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
+    assert boot2.status_code == 401
+
+    # Session cookie now unlocks GET /api/auth/session
+    sess_res = client.get("/api/auth/session")
+    assert sess_res.status_code == 200
+    assert sess_res.json()["session_token"] == sess_tok
+
+    # Evil Origin on WebSocket must be rejected before accept
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            "/ws/jobs/nonexistent", headers={"Origin": "https://evil.example"}
+        ):
+            pass
+
+    # Valid X-Session-Token triggers /api/shutdown
+    sd = client.post("/api/shutdown", headers={"X-Session-Token": sess_tok})
+    assert sd.status_code == 200
+    assert shutdown_called["flag"] is True
+
+
+def test_wtc_lifecycle_ws_progress_cache_hit_and_sse(api_client):
+    client, headers, settings = api_client
+    catalog_before = (DEFAULT_PROCESSED_DIR / "catalog.sqlite").read_bytes()
+
+    wtc_req = {
+        "episode_id": "storm_20261004_05",
+        "station_i": "BEL",
+        "station_j": "WNG",
+        "component": "X",
+        "coord_frame": "XYZ",
+        "period_min_sec": 120.0,
+        "period_max_sec": 1800.0,
+        "dj": 1.0 / 8.0,
+        "gap_policy": "subsegments",
+        "n_surrogates": 30,
+        "alpha": 0.05,
+        "seed": 7,
+        "start_utc": "2026-10-04T00:00:00Z",
+        "end_utc": "2026-10-04T11:59:00Z",
+    }
+
+    # 1) Cache miss -> queued job
+    r_sub = client.post("/api/jobs/wtc", headers=headers, json=wtc_req)
+    assert r_sub.status_code == 200, r_sub.text
+    job1 = r_sub.json()
+    assert job1["cache_hit"] is False
+    assert job1["status"] in ("queued", "running")
+
+    # 2) WebSocket streams progress until completed
+    ws_frames = []
+    with client.websocket_connect(f"/ws/jobs/{job1['job_id']}") as ws:
+        while True:
+            msg = ws.receive_json()
+            ws_frames.append(msg)
+            if msg["status"] in ("completed", "cached", "failed", "cancelled"):
+                break
+    assert ws_frames[-1]["status"] == "completed"
+    assert ws_frames[-1]["progress_pct"] == 100.0
+
+    # 3) Fetch full WTC + 95% MC contour result
+    res1 = client.get(f"/api/jobs/{job1['job_id']}/result", params={"stride": 4})
+    assert res1.status_code == 200
+    payload1 = res1.json()
+    assert len(payload1["timestamps_utc"]) == 720 // 4
+    assert len(payload1["wtc_sig95"]) == len(payload1["periods_sec"])
+    assert (settings.user_data_dir / "runtime.sqlite").is_file()
+
+    # Read-only catalog.sqlite must remain byte-for-byte untouched
+    assert (DEFAULT_PROCESSED_DIR / "catalog.sqlite").read_bytes() == catalog_before
+
+    # 4) Identical second request -> instant cache hit
+    r_cached = client.post("/api/jobs/wtc", headers=headers, json=wtc_req)
+    assert r_cached.status_code == 200
+    job2 = r_cached.json()
+    assert job2["cache_hit"] is True
+    assert job2["status"] == "cached"
+    assert job2["progress_pct"] == 100.0
+
+    # 5) Verify SSE fallback on cached/completed job
+    with client.stream("GET", f"/api/jobs/{job2['job_id']}/events") as sse:
+        assert sse.status_code == 200
+        data_lines = [ln for ln in sse.iter_lines() if ln.startswith("data: ")]
+        assert data_lines
+        evt = json.loads(data_lines[-1][6:])
+        assert evt["status"] == "cached"
+
+    # 6) Cache index lists cross_wtc artifact
+    c_list = client.get("/api/cache?category=cross_wtc")
+    assert c_list.status_code == 200
+    assert any(entry["cache_key"] == job1["cache_key"] for entry in c_list.json())
+
+
+def test_wtc_mid_monte_carlo_cancellation_cleans_up_temp_files(api_client):
+    client, headers, settings = api_client
+
+    r_sub = client.post(
+        "/api/jobs/wtc",
+        headers=headers,
+        json={
+            "episode_id": "storm_20261009_11",
+            "station_i": "LVV",
+            "station_j": "BEL",
+            "component": "X",
+            "coord_frame": "XYZ",
+            "n_surrogates": 300,
+            "seed": 19,
+        },
+    )
+    assert r_sub.status_code == 200
+    job_id = r_sub.json()["job_id"]
+    cache_key = r_sub.json()["cache_key"]
+
+    # Wait briefly until worker enters running Monte Carlo loop
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        cur = client.get(f"/api/jobs/{job_id}").json()
+        if cur["status"] == "running" and cur["completed_steps"] > 0:
+            break
+        if cur["status"] == "completed":
+            break
+        time.sleep(0.1)
+
+    r_del = client.delete(f"/api/jobs/{job_id}", headers=headers)
+    assert r_del.status_code == 200
+
+    # Poll until terminal cancelled state within 10s
+    final_status = None
+    cancel_deadline = time.monotonic() + 10.0
+    while time.monotonic() < cancel_deadline:
+        st = client.get(f"/api/jobs/{job_id}").json()["status"]
+        if st in ("cancelled", "completed", "failed"):
+            final_status = st
+            break
+        time.sleep(0.1)
+
+    assert final_status == "cancelled"
+    assert not list((settings.user_cache_dir / "cross_wtc").glob("*.tmp*"))
+    assert not (settings.user_cache_dir / "cross_wtc" / f"{cache_key}.npz").exists()
+    assert client.get(f"/api/jobs/{job_id}/result").status_code == 409
+
+
+def test_wtc_rejects_absent_station_and_baseless_xmy_and_quota(api_client):
+    client, headers, _ = api_client
+
+    # SUA absent in storm_20261004_05
+    r_sua = client.post(
+        "/api/jobs/wtc",
+        headers=headers,
+        json={
+            "episode_id": "storm_20261004_05",
+            "station_i": "SUA",
+            "station_j": "BEL",
+            "n_surrogates": 10,
+        },
+    )
+    assert r_sua.status_code == 422
+
+    # GCK without external D0 in XmYm
+    r_gck = client.post(
+        "/api/jobs/wtc",
+        headers=headers,
+        json={
+            "episode_id": "storm_20261004_05",
+            "station_i": "GCK",
+            "station_j": "BEL",
+            "coord_frame": "XmYm",
+            "component": "Xm",
+            "n_surrogates": 10,
+        },
+    )
+    assert r_gck.status_code == 422
+
+    # Exceeding max_mc_surrogates quota
+    r_quota = client.post(
+        "/api/jobs/wtc",
+        headers=headers,
+        json={
+            "episode_id": "storm_20261004_05",
+            "station_i": "BEL",
+            "station_j": "WNG",
+            "n_surrogates": 2000,
+        },
+    )
+    assert r_quota.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_async_httpx_transport_and_endpoints(tmp_path: Path):
+    from geomag_api import ApiSettings, create_app
+
+    settings = ApiSettings(
+        processed_dir=DEFAULT_PROCESSED_DIR,
+        static_cache_dir=tmp_path / "static_cache",
+        user_data_dir=tmp_path / "user_data",
+        max_workers=1,
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1:8000"
+        ) as ac:
+            h = await ac.get("/api/health")
+            assert h.status_code == 200
+            assert h.json()["catalog_stations"] == 50
+
+            cat = await ac.get("/api/catalog/episodes")
+            assert cat.status_code == 200 and len(cat.json()) == 4
+
+
+def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+
+    env = dict(os.environ)
+    env["GEOMAG_USER_DATA_DIR"] = str(tmp_path / "uvicorn_user_data")
+    env["GEOMAG_STATIC_CACHE_DIR"] = str(tmp_path / "uvicorn_static_cache")
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "geomag_api.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--workers",
+            "1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        base_url = f"http://127.0.0.1:{port}"
+        ready = False
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            try:
+                r = httpx.get(f"{base_url}/api/health", timeout=1.0)
+                if r.status_code == 200:
+                    assert r.json()["catalog_stations"] == 50
+                    ready = True
+                    break
+            except httpx.HTTPError:
+                time.sleep(0.2)
+        assert ready, "uvicorn subprocess failed to become healthy within 15s"
+        oa = httpx.get(f"{base_url}/openapi.json", timeout=2.0)
+        assert oa.status_code == 200
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5.0)
