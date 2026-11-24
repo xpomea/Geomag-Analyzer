@@ -3,31 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 from scipy.signal.windows import dpss
 
 from .conventions import DT_1MIN_SEC, get_band_spec, is_window_valid
-
-# Reference Table 3 effective degrees of freedom (L=128, M=64, Hann, OLS linear detrend)
-_TABLE_3_N_EFF: dict[tuple[int, str, str], int] = {
-    (256, "Pc5", "flat"): 56,
-    (256, "Pc5", "red"): 38,
-    (256, "Pc6", "flat"): 13,
-    (256, "Pc6", "red"): 11,
-    (360, "Pc5", "flat"): 75,
-    (360, "Pc5", "red"): 53,
-    (360, "Pc6", "flat"): 17,
-    (360, "Pc6", "red"): 14,
-    (720, "Pc5", "flat"): 190,
-    (720, "Pc5", "red"): 135,
-    (720, "Pc6", "flat"): 42,
-    (720, "Pc6", "red"): 34,
-    (1440, "Pc5", "flat"): 395,
-    (1440, "Pc5", "red"): 263,
-    (1440, "Pc6", "flat"): 87,
-    (1440, "Pc6", "red"): 68,
-}
 
 
 @dataclass(frozen=True)
@@ -304,6 +285,113 @@ def welch_segment_dof(K_ij: np.ndarray | int, *, L: int = 128, M: int = 64) -> n
     return out
 
 
+@lru_cache(maxsize=64)
+def _welch_gram_invariants(
+    L: int,
+    M: int,
+    dt: float,
+    f_min_hz: float,
+    f_max_hz: float,
+    is_red: bool,
+) -> tuple[float, float, tuple[tuple[int, float], ...]]:
+    """Precompute exact Block-Toeplitz Gram invariants for Welch effective DOF.
+
+    Builds A = (E_B * w) @ P_det for OLS linear detrending, periodic Hann window w,
+    and DFT bins in [f_min_hz, f_max_hz], then evaluates the trace and Frobenius
+    norms of G_r = A C_lag(r) A^* across all overlapping segment lags r * M < L.
+    """
+    freqs = np.fft.rfftfreq(L, d=dt)
+    f_mask = (freqs >= f_min_hz * (1.0 - 1e-12)) & (freqs <= f_max_hz * (1.0 + 1e-12))
+    k_bins = np.where(f_mask)[0]
+    if k_bins.size == 0:
+        raise ValueError(
+            f"No FFT bins in [{f_min_hz}, {f_max_hz}] Hz for L={L}, dt={dt}"
+        )
+
+    t_c = np.arange(L, dtype=np.float64) - 0.5 * (L - 1.0)
+    slope_norm = float(np.dot(t_c, t_c)) if L > 1 else 1.0
+    p_det = np.eye(L, dtype=np.float64) - 1.0 / float(L)
+    if L > 1:
+        p_det = p_det - np.outer(t_c, t_c) / slope_norm
+
+    win = periodic_hann_window(L)
+    n_idx = np.arange(L, dtype=np.float64)
+    e_b = np.exp(-2j * np.pi * np.outer(k_bins, n_idx) / float(L))
+    op_a = (e_b * win[None, :]) @ p_det
+
+    max_r = max(0, (L - 1) // M)
+    if is_red:
+        u = n_idx[:, None]
+        v = n_idx[None, :]
+
+    def _lag_cov(r: int) -> np.ndarray:
+        shift = r * M
+        if not is_red:
+            c_mat = np.zeros((L, L), dtype=np.float64)
+            if shift < L:
+                idx = np.arange(L - shift)
+                c_mat[idx + shift, idx] = 1.0
+            return c_mat
+        # For Brownian motion, the random-walk constant shift m*M is annihilated by P_det.
+        return np.minimum(u, float(shift) + v)
+
+    g0 = op_a @ _lag_cov(0) @ op_a.conj().T
+    tr0 = float(np.real(np.trace(g0)))
+    frob0_sq = float(np.sum(np.abs(g0) ** 2))
+    lag_frob_sq: list[tuple[int, float]] = []
+    for r in range(1, max_r + 1):
+        gr = op_a @ _lag_cov(r) @ op_a.conj().T
+        lag_frob_sq.append((r, float(np.sum(np.abs(gr) ** 2))))
+    return tr0, frob0_sq, tuple(lag_frob_sq)
+
+
+def welch_effective_dof(
+    K: np.ndarray | int,
+    *,
+    L: int = 128,
+    M: int = 64,
+    dt: float = DT_1MIN_SEC,
+    band: str = "Pc5",
+    spectrum_type: str = "flat",
+    t_max_pc6_sec: float = 1800.0,
+    f_min_hz: float | None = None,
+    f_max_hz: float | None = None,
+) -> np.ndarray:
+    """Compute exact Block-Toeplitz Gram-matrix Welch effective DOF n_eff (§4.4)."""
+    if L <= 0 or M <= 0 or dt <= 0.0:
+        raise ValueError(f"L, M, and dt must be positive, got L={L}, M={M}, dt={dt}")
+
+    s_key = spectrum_type.strip().lower()
+    if s_key in ("flat", "white"):
+        is_red = False
+    elif s_key in ("red", "f-2", "f^-2", "brownian", "random_walk"):
+        is_red = True
+    else:
+        raise ValueError(f"Unsupported spectrum_type {spectrum_type!r}")
+
+    spec = get_band_spec(
+        band=band,
+        t_max_pc6_sec=t_max_pc6_sec,
+        f_min_hz=f_min_hz,
+        f_max_hz=f_max_hz,
+    )
+    tr0, frob0_sq, lag_frob_sq = _welch_gram_invariants(
+        int(L),
+        int(M),
+        float(dt),
+        spec.f_min_hz,
+        spec.f_max_hz,
+        is_red,
+    )
+
+    k_arr = np.asarray(K, dtype=np.float64)
+    denom = k_arr * frob0_sq
+    for r, fr2 in lag_frob_sq:
+        denom = denom + 2.0 * np.maximum(0.0, k_arr - float(r)) * fr2
+    num = (k_arr * tr0) ** 2
+    return np.where(k_arr > 0.0, num / np.maximum(denom, 1e-30), 0.0)
+
+
 def lookup_welch_effective_n(
     n_samples: int,
     *,
@@ -313,24 +401,25 @@ def lookup_welch_effective_n(
     M: int = 64,
     dt: float = DT_1MIN_SEC,
     t_max_pc6_sec: float = 1800.0,
+    f_min_hz: float | None = None,
+    f_max_hz: float | None = None,
 ) -> float:
-    """Return Table 3 effective DOF n (or overlap-corrected §4.4 estimate for custom K/M)."""
-    band_key = "Pc5" if band.strip().upper() == "PC5" else "Pc6"
-    spec_key = "flat" if spectrum_type.strip().lower() in ("flat", "white") else "red"
-    if L == 128 and M == 64 and dt == 60.0 and t_max_pc6_sec == 1800.0:
-        exact = _TABLE_3_N_EFF.get((n_samples, band_key, spec_key))
-        if exact is not None:
-            return float(exact)
-
-    k_seg = max(1, (n_samples - L) // M + 1)
-    k_eff = float(welch_segment_dof(k_seg, L=L, M=M).item())
-    freqs = np.fft.rfftfreq(L, d=dt)
-    n_b = int(np.sum(band_frequency_mask(freqs, band=band, t_max_pc6_sec=t_max_pc6_sec)))
-    if spec_key == "flat":
-        factor = 0.5
-    else:
-        factor = 0.34 if band_key == "Pc5" else 0.42
-    return float(max(2.0, factor * k_eff * n_b))
+    """Compute Welch effective DOF n for a window of n_samples from first principles (§4.4)."""
+    if L <= 0 or M <= 0:
+        raise ValueError(f"L and M must be positive, got L={L}, M={M}")
+    k_seg = max(1, (int(n_samples) - int(L)) // int(M) + 1)
+    n_eff = welch_effective_dof(
+        k_seg,
+        L=L,
+        M=M,
+        dt=dt,
+        band=band,
+        spectrum_type=spectrum_type,
+        t_max_pc6_sec=t_max_pc6_sec,
+        f_min_hz=f_min_hz,
+        f_max_hz=f_max_hz,
+    )
+    return float(n_eff.item())
 
 
 def calibrate_welch_effective_n_mc(

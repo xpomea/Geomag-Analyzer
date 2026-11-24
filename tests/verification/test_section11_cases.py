@@ -497,15 +497,52 @@ def test_case_d_kaiser_oversampling_mode():
 
 
 def test_welch_effective_n_overlap_consistency():
+    fixtures = _load_fixtures()
+
+    # 1) Non-50% overlaps and unified API consistency across Welch DOF helpers
     for m_step in (128, 64, 32, 16):
         k_seg = (1440 - 128) // m_step + 1
         n_lookup = gc.lookup_welch_effective_n(1440, band="Pc5", L=128, M=m_step)
         n_band = float(
             gc.welch_band_dof(k_seg, N_B=39, band="Pc5", spectrum_type="flat", L=128, M=m_step)
         )
-        n_mc = gc.calibrate_welch_effective_n_mc(
-            1440, band="Pc5", L=128, M=m_step, n_trials=800, seed=50 + m_step
+        n_gram = float(
+            gc.welch_effective_dof(k_seg, L=128, M=m_step, band="Pc5", spectrum_type="flat")
         )
-        assert abs(n_lookup - n_mc) / n_mc <= 0.15
-        assert abs(n_band - n_mc) / n_mc <= 0.15
-        assert n_lookup < 500.0 and n_band < 500.0
+        n_mc = gc.calibrate_welch_effective_n_mc(
+            1440, band="Pc5", L=128, M=m_step, n_trials=1200, seed=50 + m_step
+        )
+        assert math.isclose(n_lookup, n_band, abs_tol=1e-12)
+        assert math.isclose(n_lookup, n_gram, abs_tol=1e-12)
+        assert abs(n_lookup - n_mc) / n_mc <= 0.05
+
+    # No discontinuous jump between N=1440 and N=1439 (same K=21)
+    assert math.isclose(
+        gc.lookup_welch_effective_n(1440, band="Pc6", spectrum_type="flat"),
+        gc.lookup_welch_effective_n(1439, band="Pc6", spectrum_type="flat"),
+        abs_tol=1e-12,
+    )
+
+    # 2) Analytical Block-Toeplitz Gram agreement across all 16 Table 3 cells (no table lookup)
+    for row in fixtures["table_3_welch_effective_n"]["windows"]:
+        n_pts = row["n_samples"]
+        for band, spec, key in [
+            ("Pc5", "flat", "pc5_flat"),
+            ("Pc5", "red", "pc5_red_f2"),
+            ("Pc6", "flat", "pc6_flat"),
+            ("Pc6", "red", "pc6_red_f2"),
+        ]:
+            ref = float(row[key])
+            n_est = gc.lookup_welch_effective_n(n_pts, band=band, spectrum_type=spec, L=128, M=64)
+            tol_rel = 0.03 if n_pts == 1440 else 0.085
+            assert abs(n_est - ref) / ref <= tol_rel
+
+    # 3) Non-standard narrow Pc6 (T_max = 900 s) flat & red vs live Monte Carlo
+    for spec in ("flat", "red"):
+        n_est = gc.lookup_welch_effective_n(
+            1440, band="Pc6", spectrum_type=spec, t_max_pc6_sec=900.0
+        )
+        n_mc = gc.calibrate_welch_effective_n_mc(
+            1440, band="Pc6", spectrum_type=spec, t_max_pc6_sec=900.0, n_trials=1500, seed=71
+        )
+        assert abs(n_est - n_mc) / n_mc <= 0.05

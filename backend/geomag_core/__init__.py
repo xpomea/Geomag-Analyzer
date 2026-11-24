@@ -99,6 +99,7 @@ from .spectral import (
     detrend_linear_ols,
     lookup_welch_effective_n,
     periodic_hann_window,
+    welch_effective_dof,
     welch_segment_dof,
 )
 
@@ -189,6 +190,7 @@ __all__ = [
     "stokes_from_spectral_matrix_2d",
     "synthetic_ellipse_2d",
     "welch_band_dof",
+    "welch_effective_dof",
     "welch_segment_dof",
     "xyz_to_hdz",
 ]

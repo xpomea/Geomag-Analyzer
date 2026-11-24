@@ -119,9 +119,11 @@ def bin_swips_to_minute_grid(
     breaking exact distance ties in favor of the earlier scan timestamp.
     """
     df = swips_df.sort_values("timestamp_utc", kind="mergesort").reset_index(drop=True)
-    scan_ns = df["timestamp_utc"].dt.tz_convert("UTC").astype("int64").to_numpy()
+    scan_ns = (
+        df["timestamp_utc"].dt.tz_convert("UTC").dt.as_unit("ns").astype("int64").to_numpy()
+    )
     target_idx = pd.DatetimeIndex(target_timestamps).tz_convert("UTC")
-    target_ns = target_idx.astype("int64").to_numpy()
+    target_ns = target_idx.as_unit("ns").astype("int64").to_numpy()
     half_ns = int(round(half_window_sec * 1_000_000_000))
 
     flags_arr = df["flags"].to_numpy(dtype=np.int64)

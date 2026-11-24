@@ -41,19 +41,27 @@ def default_trim_hours(
     band: str = "Pc5",
     filter_method: str = "sos",
     order_n: int = 3,
+    *,
+    t_max_pc6_sec: float = 1800.0,
+    f1_hz: float | None = None,
+    f2_hz: float | None = None,
+    rho: float = 0.25,
 ) -> float:
-    """Return practical edge trim T_cut [hours] per §9.3 and Table 14."""
-    b_key = band.strip().upper()
+    """Compute band-aware practical edge trim T_cut [hours] from filter decay scales (§9.3)."""
+    spec = get_band_spec(
+        band=band,
+        t_max_pc6_sec=t_max_pc6_sec,
+        f_min_hz=f1_hz,
+        f_max_hz=f2_hz,
+    )
+    t_max_h = spec.t_max_sec / 3600.0
+    bw_hz = spec.f_max_hz - spec.f_min_hz
+    t_bw_h = 1.0 / (3600.0 * bw_hz)
+    tau_h = max(t_max_h, t_bw_h)
     f_key = filter_method.strip().lower()
-    if b_key == "PC5":
-        return 3.0
-    if b_key == "PC6":
-        if f_key in ("fft", "fft_mask"):
-            return 5.0
-        if order_n >= 4:
-            return 3.5
-        return 3.0
-    return 3.0
+    if f_key in ("fft", "fft_mask"):
+        return round(max(3.0, 2.5 * tau_h / max(float(rho), 0.05)), 4)
+    return round(max(3.0, (float(order_n) + 3.0) * tau_h), 4)
 
 
 def analytic_signal_marple(x: np.ndarray, *, reflect_samples: int = 0) -> np.ndarray:
@@ -231,7 +239,7 @@ def run_variant_b_pipeline(
     oversample_method: str = "fourier",
     oversample_pad_samples: int = 240,
     trim_hours: float | None = None,
-    reflect_hours: float = 6.0,
+    reflect_hours: float | None = None,
     analytic_reflect_hours: float = 6.0,
     min_window_hours: float = 1.0,
     detrend_pc6: bool | None = None,
@@ -256,9 +264,19 @@ def run_variant_b_pipeline(
     n_orig, n_comp = arr.shape
 
     eff_trim_hours = (
-        default_trim_hours(band=band, filter_method=filter_method, order_n=order_n)
+        default_trim_hours(
+            band=band,
+            filter_method=filter_method,
+            order_n=order_n,
+            t_max_pc6_sec=t_max_pc6_sec,
+            f1_hz=f1_hz,
+            f2_hz=f2_hz,
+        )
         if trim_hours is None
         else float(trim_hours)
+    )
+    eff_reflect_hours = (
+        max(6.0, eff_trim_hours) if reflect_hours is None else float(reflect_hours)
     )
     trim_orig = int(round(eff_trim_hours * 3600.0 / dt))
     min_win_orig = max(1, int(round(min_window_hours * 3600.0 / dt)))
@@ -338,7 +356,7 @@ def run_variant_b_pipeline(
                 f1_hz=f1_hz,
                 f2_hz=f2_hz,
                 t_max_pc6_sec=t_max_pc6_sec,
-                reflect_hours=reflect_hours,
+                reflect_hours=eff_reflect_hours,
                 detrend=detrend_pc6,
             )
         elif f_key in ("sos", "butterworth", "butterworth_sos"):
@@ -350,7 +368,7 @@ def run_variant_b_pipeline(
                 f1_hz=f1_hz,
                 f2_hz=f2_hz,
                 t_max_pc6_sec=t_max_pc6_sec,
-                reflect_hours=reflect_hours,
+                reflect_hours=eff_reflect_hours,
                 detrend=detrend_pc6,
             )
         else:

@@ -15,6 +15,7 @@ from .spectral import (
     band_frequency_mask,
     detrend_linear_ols,
     periodic_hann_window,
+    welch_effective_dof,
     welch_segment_dof,
 )
 
@@ -296,21 +297,29 @@ def load_phase1_cache(path: Path) -> Phase1StationSpectra:
 def welch_band_dof(
     K_ij: np.ndarray | int,
     *,
-    N_B: int,
+    N_B: int | None = None,
     band: str = "Pc5",
     spectrum_type: str = "flat",
     L: int = 128,
     M: int = 64,
+    dt: float = DT_1MIN_SEC,
+    t_max_pc6_sec: float = 1800.0,
+    f_min_hz: float | None = None,
+    f_max_hz: float | None = None,
 ) -> np.ndarray:
-    """Overlap-corrected effective DOF n_ij for band-averaged Welch coherence (§4.4)."""
-    k_eff = welch_segment_dof(K_ij, L=L, M=M)
-    b_key = band.strip().upper()
-    s_key = spectrum_type.strip().lower()
-    if s_key in ("flat", "white"):
-        factor = 0.5
-    else:
-        factor = 0.34 if b_key == "PC5" else 0.42
-    return factor * k_eff * float(N_B)
+    """Band-averaged Welch effective DOF via exact Block-Toeplitz Gram formulation."""
+    _ = N_B  # Retained for API backward compatibility; bin structure follows L, dt, band.
+    return welch_effective_dof(
+        K_ij,
+        L=L,
+        M=M,
+        dt=dt,
+        band=band,
+        spectrum_type=spectrum_type,
+        t_max_pc6_sec=t_max_pc6_sec,
+        f_min_hz=f_min_hz,
+        f_max_hz=f_max_hz,
+    )
 
 
 def _gamma2_crit_from_n(n_eff: np.ndarray, alpha: float) -> np.ndarray:
@@ -414,6 +423,10 @@ def compute_welch_cross_pair(
             spectrum_type=spectrum_type,
             L=spec_i.L,
             M=spec_i.M,
+            dt=spec_i.dt,
+            t_max_pc6_sec=t_max_pc6_sec,
+            f_min_hz=f_min_hz,
+            f_max_hz=f_max_hz,
         ),
         np.nan,
     )
@@ -531,6 +544,10 @@ def compute_welch_cross_matrix(
                 spectrum_type=spectrum_type,
                 L=ref.L,
                 M=ref.M,
+                dt=ref.dt,
+                t_max_pc6_sec=t_max_pc6_sec,
+                f_min_hz=f_min_hz,
+                f_max_hz=f_max_hz,
             ),
             np.nan,
         )

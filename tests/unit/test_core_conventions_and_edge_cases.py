@@ -258,3 +258,36 @@ def test_variant_b_respects_is_valid_xyz_qc_thresholds():
         xy, band="Pc5", filter_method="sos", is_valid_xyz=valid_ok
     )
     assert res_ok.is_valid is True
+
+
+def test_default_trim_hours_and_variant_b_custom_bands():
+    # Standard Table 14 / §9.3 bands preserved
+    assert gc.default_trim_hours("Pc5", "fft_mask") == 3.0
+    assert gc.default_trim_hours("Pc6", "fft_mask", t_max_pc6_sec=1800.0) == 5.0
+    assert gc.default_trim_hours("Pc6", "sos", order_n=3, t_max_pc6_sec=1800.0) == 3.0
+    assert gc.default_trim_hours("Pc6", "sos", order_n=4, t_max_pc6_sec=1800.0) == 3.5
+
+    # Long/custom passbands scale cleanly with T_max instead of falling back to 3.0 h
+    assert gc.default_trim_hours("Pc6", "fft_mask", t_max_pc6_sec=3600.0) == 10.0
+    assert gc.default_trim_hours("Pc6", "sos", order_n=3, t_max_pc6_sec=3600.0) == 6.0
+    custom_fft_trim = gc.default_trim_hours(
+        "custom", "fft_mask", f1_hz=1.0 / 3600.0, f2_hz=1.0 / 600.0
+    )
+    assert custom_fft_trim == 10.0
+
+    # End-to-end Variant B recovery on T=3000s wave inside T_max=3600s Pc6 band
+    n_total = 36 * 60
+    t = np.arange(n_total, dtype=np.float64) * gc.DT_1MIN_SEC
+    xy = gc.synthetic_ellipse_2d(t, T_sec=3000.0, a=15.0, b=5.0, psi0_deg=-20.0, h=-1)
+    res = gc.run_variant_b_pipeline(
+        xy,
+        band="Pc6",
+        filter_method="fft_mask",
+        t_max_pc6_sec=3600.0,
+        oversample_m=4,
+    )
+    assert res.is_valid
+    assert res.trim_hours == 10.0
+    st = gc.stokes_from_spectral_matrix_2d(res.S)
+    assert math.isclose(st.p, 1.0, abs_tol=0.01)
+    assert abs(st.psi_deg - (-20.0)) < 0.5

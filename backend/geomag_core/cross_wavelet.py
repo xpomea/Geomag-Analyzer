@@ -63,6 +63,13 @@ def _morlet_fourier_factor(omega0: float = MORLET_OMEGA0) -> float:
     return (4.0 * math.pi) / (omega0 + math.sqrt(2.0 + omega0 * omega0))
 
 
+def _morlet_dj0(omega0: float = MORLET_OMEGA0) -> float:
+    """Scale decorrelation factor dj0 scaled cleanly with Morlet center frequency omega0."""
+    if omega0 <= 0.0:
+        raise ValueError(f"omega0 must be positive, got {omega0}")
+    return MORLET_DJ0 * (MORLET_OMEGA0 / float(omega0))
+
+
 def build_morlet_scales(
     n_samples: int,
     *,
@@ -264,6 +271,7 @@ def smooth_wavelet_matrix(
     *,
     dt: float = DT_1MIN_SEC,
     dj: float = 1.0 / 12.0,
+    omega0: float = MORLET_OMEGA0,
     use_numba: bool = True,
 ) -> np.ndarray:
     """Apply Grinsted et al. (2004) Gaussian time smoothing + fractional boxcar scale smoothing."""
@@ -272,7 +280,7 @@ def smooth_wavelet_matrix(
         raise ValueError(f"Shape {data.shape} incompatible with scales {scales.shape}")
     n_samples = data.shape[1]
     gauss_hat, n_pad_t = _build_time_gauss_kernels(scales, n_samples, dt)
-    width = MORLET_DJ0 / float(dj)
+    width = _morlet_dj0(omega0) / float(dj)
 
     if np.iscomplexobj(data):
         spec = np.fft.fft(data, n=n_pad_t, axis=1)
@@ -365,12 +373,24 @@ def _compute_xwt_wtc_segment(
     w_ij = w_i * np.conj(w_j)
 
     inv_s = (1.0 / scales)[:, None]
-    s_wij = smooth_wavelet_matrix(inv_s * w_ij, scales, dt=dt, dj=dj, use_numba=use_numba)
+    s_wij = smooth_wavelet_matrix(
+        inv_s * w_ij, scales, dt=dt, dj=dj, omega0=omega0, use_numba=use_numba
+    )
     s_wi2 = smooth_wavelet_matrix(
-        inv_s * (w_i.real ** 2 + w_i.imag ** 2), scales, dt=dt, dj=dj, use_numba=use_numba
+        inv_s * (w_i.real ** 2 + w_i.imag ** 2),
+        scales,
+        dt=dt,
+        dj=dj,
+        omega0=omega0,
+        use_numba=use_numba,
     )
     s_wj2 = smooth_wavelet_matrix(
-        inv_s * (w_j.real ** 2 + w_j.imag ** 2), scales, dt=dt, dj=dj, use_numba=use_numba
+        inv_s * (w_j.real ** 2 + w_j.imag ** 2),
+        scales,
+        dt=dt,
+        dj=dj,
+        omega0=omega0,
+        use_numba=use_numba,
     )
 
     denom = np.maximum(s_wi2 * s_wj2, 1e-30)
@@ -406,7 +426,7 @@ def _run_wtc_monte_carlo(
     gauss_hat, n_pad_t = _build_time_gauss_kernels(scales, n_samples, dt)
     gauss_r = gauss_hat[:, : n_pad_t // 2 + 1]
     inv_s = (1.0 / scales)[None, :, None]
-    width = MORLET_DJ0 / float(dj)
+    width = _morlet_dj0(omega0) / float(dj)
 
     if batch_size is None:
         # Cap batch working-set buffers around ~80 MB so parallel workers avoid OOM
@@ -536,7 +556,7 @@ def build_wtc_cache_key(
         "band_range": [float(period_min_sec), float(period_max_sec)],
         "scales": {"dj": float(dj)},
         "wavelet": {"name": "morlet", "omega0": float(omega0)},
-        "smoothing_params": {"dj0": MORLET_DJ0},
+        "smoothing_params": {"dj0": _morlet_dj0(omega0)},
         "gap_policy": gap_policy,
         "n_surrogates": int(n_surrogates),
         "alpha": float(alpha),

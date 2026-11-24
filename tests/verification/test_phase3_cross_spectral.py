@@ -448,3 +448,52 @@ def test_wtc_monte_carlo_peak_memory_3day():
     assert peak_bytes < 200 * 1024 * 1024, (
         f"3-day WTC MC peak memory {peak_bytes / 1e6:.1f} MB exceeded 200 MB limit"
     )
+
+
+def test_morlet_dj0_scales_with_omega0():
+    from geomag_core.cross_wavelet import _morlet_dj0
+
+    assert math.isclose(_morlet_dj0(6.0), 0.60, abs_tol=1e-12)
+    assert math.isclose(_morlet_dj0(8.0), 0.45, abs_tol=1e-12)
+
+    k6 = gc.build_wtc_cache_key(
+        gc.__version__,
+        episode_id="ep",
+        pair=("A", "B"),
+        component="X",
+        coord_frame="XYZ",
+        d0_deg=0.0,
+        period_min_sec=120.0,
+        period_max_sec=1800.0,
+        dj=1.0 / 12.0,
+        omega0=6.0,
+        gap_policy="subsegments",
+        n_surrogates=0,
+        alpha=0.05,
+        seed=42,
+    )
+    k8 = gc.build_wtc_cache_key(
+        gc.__version__,
+        episode_id="ep",
+        pair=("A", "B"),
+        component="X",
+        coord_frame="XYZ",
+        d0_deg=0.0,
+        period_min_sec=120.0,
+        period_max_sec=1800.0,
+        dj=1.0 / 12.0,
+        omega0=8.0,
+        gap_policy="subsegments",
+        n_surrogates=0,
+        alpha=0.05,
+        seed=42,
+    )
+    assert k6 != k8
+
+    t = np.arange(1440, dtype=np.float64) * gc.DT_1MIN_SEC
+    omega = 2.0 * math.pi / 300.0
+    x1 = 10.0 * np.cos(omega * t + math.radians(45.0))
+    x2 = 10.0 * np.cos(omega * t)
+    xw = gc.compute_xwt_wtc(x1, x2, omega0=8.0, n_surrogates=0)
+    s_idx = int(np.argmin(np.abs(xw.periods_sec - 300.0)))
+    assert abs(float(xw.wtc_phase_deg[s_idx, 720]) - 45.0) <= 0.5
