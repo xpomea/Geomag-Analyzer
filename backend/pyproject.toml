@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geomag-analyzer"
+version = "0.1.0"
+description = "Pc5/Pc6 geomagnetic pulsation and cross-spectral polarization analysis system"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "numba>=0.59",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "python-multipart>=0.0.9",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.4",
+    "python-docx>=1.1",
+]
+desktop = [
+    "pywebview>=5.0",
+    "pyinstaller>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["geomag_core*", "geomag_etl*", "geomag_api*"]

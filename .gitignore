@@ -1,0 +1,29 @@
+# Read-only raw source dataset (keep untracked)
+GeoMag_Storms_Dataset_Oct-2026/
+
+# Generated normalized data & precomputed caches
+data/
+user_data/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Frontend artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS / IDE
+Thumbs.db
+.DS_Store
