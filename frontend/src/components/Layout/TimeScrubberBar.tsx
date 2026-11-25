@@ -1,5 +1,5 @@
 import React from "react";
-import { Clock, ZoomIn } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, ZoomIn } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
 import { formatUtcFull, formatUtcShort } from "../../utils/formatters";
@@ -11,14 +11,18 @@ export const TimeScrubberBar: React.FC = () => {
   if (!episodeBoundsMs) {
     return (
       <div className="scrubber-bar">
-        <span className="hint-text">Загрузка временной сетки эпизода…</span>
+        <span className="hint-text">Loading episode time grid…</span>
       </div>
     );
   }
 
   const [bStart, bEnd] = episodeBoundsMs;
   const viewRange = state.viewRangeMs ?? [bStart, bEnd];
-  const cursorMs = cursorUtcMs ?? Math.round(0.5 * (bStart + bEnd));
+  const cursorMs = Math.min(
+    bEnd,
+    Math.max(bStart, cursorUtcMs ?? Math.round(0.5 * (bStart + bEnd))),
+  );
+  const stepMs = Math.max(1, state.stepSamples) * 60_000;
 
   const setDurationPreset = (hours: number | null) => {
     if (hours === null) {
@@ -33,42 +37,77 @@ export const TimeScrubberBar: React.FC = () => {
     });
   };
 
+  const viewSpanMs = viewRange[1] - viewRange[0];
+  const fullSpanMs = bEnd - bStart;
+  const isPresetActive = (hours: number | null) => {
+    if (hours === null) return Math.abs(viewSpanMs - fullSpanMs) < 120_000;
+    return Math.abs(viewSpanMs - hours * 3600_000) < 120_000;
+  };
+
   return (
     <div className="scrubber-bar">
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <ZoomIn size={14} color="var(--accent-primary)" />
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        <ZoomIn size={13} color="var(--accent-primary)" />
         <span className="mono" style={{ fontSize: 12 }}>
           {formatUtcShort(viewRange[0])} → {formatUtcShort(viewRange[1])}
         </span>
       </div>
 
-      <div className="quick-chips">
-        <button type="button" className="chip-btn" onClick={() => setDurationPreset(null)}>
-          Весь эпизод
+      <div className="quick-chips" style={{ flexShrink: 0 }}>
+        <button
+          type="button"
+          className={`chip-btn ${isPresetActive(null) ? "active" : ""}`}
+          onClick={() => setDurationPreset(null)}
+        >
+          Full
         </button>
-        <button type="button" className="chip-btn" onClick={() => setDurationPreset(24)}>
-          24 ч
-        </button>
-        <button type="button" className="chip-btn" onClick={() => setDurationPreset(12)}>
-          12 ч
-        </button>
-        <button type="button" className="chip-btn" onClick={() => setDurationPreset(6)}>
-          6 ч
-        </button>
+        {[24, 12, 6].map((h) => (
+          <button
+            key={h}
+            type="button"
+            className={`chip-btn ${isPresetActive(h) ? "active" : ""}`}
+            onClick={() => setDurationPreset(h)}
+          >
+            {h}h
+          </button>
+        ))}
       </div>
 
       <div className="scrubber-slider-wrap">
-        <Clock size={14} color="var(--text-secondary)" />
+        <Clock size={13} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+        <button
+          type="button"
+          className="btn btn-sm btn-icon"
+          onClick={() => setCursorUtcMs(Math.max(bStart, cursorMs - stepMs))}
+          disabled={cursorMs <= bStart}
+          title={`Step backward (−${state.stepSamples} min)`}
+          aria-label="Step backward"
+        >
+          <ChevronLeft size={13} />
+        </button>
         <input
           type="range"
           min={bStart}
           max={bEnd}
           step={60_000}
-          value={Math.min(bEnd, Math.max(bStart, cursorMs))}
+          value={cursorMs}
           onChange={(e) => setCursorUtcMs(Number(e.target.value))}
-          aria-label="Курсор времени UTC"
+          aria-label="UTC time cursor"
         />
-        <span className="mono" style={{ fontSize: 12, minWidth: 145, textAlign: "right" }}>
+        <button
+          type="button"
+          className="btn btn-sm btn-icon"
+          onClick={() => setCursorUtcMs(Math.min(bEnd, cursorMs + stepMs))}
+          disabled={cursorMs >= bEnd}
+          title={`Step forward (+${state.stepSamples} min)`}
+          aria-label="Step forward"
+        >
+          <ChevronRight size={13} />
+        </button>
+        <span
+          className="mono"
+          style={{ fontSize: 12, minWidth: 145, textAlign: "right", flexShrink: 0 }}
+        >
           {formatUtcFull(cursorMs)}
         </span>
       </div>

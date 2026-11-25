@@ -29,6 +29,14 @@ export const MIN_ZOOM_SPAN_MS = 30 * 60_000;
 
 export type CrossPanelTab = "spectrogram" | "welch" | "wtc";
 
+export type DeckTab =
+  | "space_weather"
+  | "magnetogram"
+  | "stokes"
+  | "spectrogram"
+  | "welch"
+  | "wtc";
+
 export type ExportTheme = "light" | "dark";
 
 export interface AnalysisState {
@@ -68,6 +76,7 @@ export interface AnalysisState {
 
   crossComponent: CrossComponent;
   activeCrossTab: CrossPanelTab;
+  activeDeckTab: DeckTab;
   wtcStride: number;
 
   jobs: JobStatusResponse[];
@@ -114,6 +123,7 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
 
   crossComponent: "X",
   activeCrossTab: "spectrogram",
+  activeDeckTab: "stokes",
   wtcStride: 2,
 
   jobs: [],
@@ -151,6 +161,7 @@ export type AnalysisAction =
   | { type: "SET_SHOW_NOISE_GHOST"; show: boolean }
   | { type: "SET_CROSS_COMPONENT"; component: CrossComponent }
   | { type: "SET_ACTIVE_CROSS_TAB"; tab: CrossPanelTab }
+  | { type: "SET_ACTIVE_DECK_TAB"; tab: DeckTab }
   | { type: "SET_WTC_STRIDE"; stride: number }
   | {
       type: "OPEN_WTC_JOB";
@@ -356,7 +367,21 @@ export function analysisReducer(
       return { ...state, crossComponent: action.component };
 
     case "SET_ACTIVE_CROSS_TAB":
-      return { ...state, activeCrossTab: action.tab };
+      return { ...state, activeCrossTab: action.tab, activeDeckTab: action.tab };
+
+    case "SET_ACTIVE_DECK_TAB": {
+      const nextCross: CrossPanelTab =
+        action.tab === "spectrogram" || action.tab === "welch" || action.tab === "wtc"
+          ? action.tab
+          : state.activeCrossTab === "welch"
+            ? "spectrogram"
+            : state.activeCrossTab;
+      return {
+        ...state,
+        activeDeckTab: action.tab,
+        activeCrossTab: nextCross,
+      };
+    }
 
     case "SET_WTC_STRIDE":
       return { ...state, wtcStride: Math.max(1, Math.round(action.stride)) };
@@ -386,6 +411,7 @@ export function analysisReducer(
         cursorUtcMs: nextCursor,
         activeWtcJobId: action.jobId,
         activeCrossTab: "wtc",
+        activeDeckTab: "wtc",
       };
     }
 
@@ -465,8 +491,8 @@ export function getStationBaselineWarning(
   if (!station) return null;
   if (!station.has_baseline && coordFrame === "XmYm" && externalD0Deg === null) {
     return (
-      `Станция ${station.iaga_code} не имеет абсолютной базовой линии (variation-only). ` +
-      `Поворот в локальную СК XmYm заблокирован без явного ввода D0.`
+      `Station ${station.iaga_code} has no absolute baseline (variation-only). ` +
+      `Automatic rotation to XmYm is blocked without an explicit D0 value.`
     );
   }
   return null;

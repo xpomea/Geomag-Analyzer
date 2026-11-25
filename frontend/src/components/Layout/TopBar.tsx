@@ -1,84 +1,113 @@
 import React, { useState } from "react";
-import { Activity, Cpu, Loader2, Power, Radio } from "lucide-react";
+import {
+  Activity,
+  Cpu,
+  Loader2,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Power,
+  Radio,
+  Sun,
+} from "lucide-react";
 import { TERMINAL_JOB_STATUSES } from "../../api/client";
 import { useAnalysis } from "../../store/AnalysisContext";
-import { useCursor } from "../../store/CursorContext";
-import { formatUtcFull } from "../../utils/formatters";
 
-const TopBarCursorPill: React.FC = () => {
-  const { cursorUtcMs } = useCursor();
-  if (cursorUtcMs === null) return null;
-  return <span className="pill mono">UTC: {formatUtcFull(cursorUtcMs)}</span>;
-};
+export interface TopBarProps {
+  sidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
+}
 
-export const TopBar: React.FC = () => {
-  const { state, dispatch, health, activeEpisode, triggerShutdown } = useAnalysis();
+export const TopBar: React.FC<TopBarProps> = ({
+  sidebarOpen = true,
+  onToggleSidebar,
+}) => {
+  const { state, dispatch, health, triggerShutdown } = useAnalysis();
   const [confirmShutdown, setConfirmShutdown] = useState(false);
 
   const runningJobs = state.jobs.filter((j) => !TERMINAL_JOB_STATUSES.has(j.status));
+  const isLightExport = state.exportTheme === "light";
 
   return (
     <>
       <header className="topbar">
         <div className="topbar-brand">
-          <Radio size={18} color="var(--accent-primary)" />
-          <div>
-            <div className="topbar-title">GeoMag Analyzer</div>
-            <div className="topbar-sub">Поляризация Pc5/Pc6 · INTERMAGNET · SOLAR-1 · OMNI · OULU</div>
+          {onToggleSidebar && (
+            <button
+              type="button"
+              className="btn btn-sm btn-icon"
+              onClick={onToggleSidebar}
+              title={sidebarOpen ? "Collapse control sidebar" : "Expand control sidebar"}
+              aria-label={sidebarOpen ? "Collapse control sidebar" : "Expand control sidebar"}
+            >
+              {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+            </button>
+          )}
+          <Radio size={17} color="var(--accent-primary)" />
+          <div className="topbar-title-row">
+            <span className="topbar-title">GeoMag Analyzer</span>
+            <span className="topbar-sub">
+              Pc5/Pc6 Polarization · INTERMAGNET · SOLAR-1 · OMNI · OULU
+            </span>
           </div>
         </div>
 
-        <div className="topbar-pills">
-          {activeEpisode && (
-            <span className="pill pill-accent mono">{activeEpisode.label}</span>
-          )}
-          <span className="pill mono">
-            {state.stationA} ↔ {state.stationB} · {state.band} · {state.coordFrame}
-          </span>
-          <span className="pill mono">α = {state.alpha}</span>
-          <TopBarCursorPill />
+        <div className="topbar-actions">
           {health ? (
             <span className="pill pill-ok">
               <Activity size={12} />
               <span>
-                API {health.core_version} ({health.catalog_stations} ст.)
+                API {health.core_version} ({health.catalog_stations} st.)
               </span>
             </span>
           ) : (
-            <span className="pill pill-warn">Подключение…</span>
+            <span className="pill pill-warn">Connecting…</span>
           )}
-        </div>
 
-        <div className="topbar-actions">
           <button
             type="button"
-            className="btn"
+            className="btn btn-sm"
+            onClick={() =>
+              dispatch({
+                type: "SET_EXPORT_THEME",
+                theme: isLightExport ? "dark" : "light",
+              })
+            }
+            title="Global figure export theme for SVG / PNG 300 DPI"
+          >
+            {isLightExport ? <Sun size={13} color="#f59e0b" /> : <Moon size={13} />}
+            <span>Export: {isLightExport ? "Print Light" : "Screen Dark"}</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-sm"
             onClick={() => dispatch({ type: "SET_JOB_DRAWER_OPEN", open: !state.jobDrawerOpen })}
           >
             {runningJobs.length > 0 ? (
-              <Loader2 size={14} className="spin" color="var(--accent-primary)" />
+              <Loader2 size={13} className="spin" color="var(--accent-primary)" />
             ) : (
-              <Cpu size={14} />
+              <Cpu size={13} />
             )}
-            <span>Задачи и кэш</span>
+            <span>Jobs &amp; Cache</span>
             <span className="pill mono" style={{ padding: "1px 6px" }}>
-              {runningJobs.length > 0 ? `${runningJobs.length} акт.` : state.cacheEntries.length}
+              {runningJobs.length > 0 ? `${runningJobs.length} active` : state.cacheEntries.length}
             </span>
           </button>
 
           <button
             type="button"
-            className="btn btn-danger"
+            className="btn btn-sm btn-danger"
             onClick={() => setConfirmShutdown(true)}
             disabled={state.serverStatus !== "running" || health?.can_shutdown === false}
             title={
               health?.can_shutdown === false
-                ? "Остановка сервера доступна только в настольном режиме launcher / --browser"
-                : "Корректно остановить сервер и пул воркеров (для режима --browser)"
+                ? "Server shutdown is only available in desktop launcher / --browser mode"
+                : "Gracefully stop FastAPI server and worker pool"
             }
           >
-            <Power size={14} />
-            <span>Выход</span>
+            <Power size={13} />
+            <span>Exit</span>
           </button>
         </div>
       </header>
@@ -86,15 +115,14 @@ export const TopBar: React.FC = () => {
       {confirmShutdown && (
         <div className="modal-backdrop">
           <div className="modal-card">
-            <div style={{ fontWeight: 600, fontSize: 15 }}>Остановить сервер GeoMag Analyzer?</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>Stop GeoMag Analyzer Server?</div>
             <div className="hint-text">
-              Отправит команду <span className="mono">POST /api/shutdown</span> для корректного
-              завершения воркеров <span className="mono">ProcessPoolExecutor</span> и закрытия локального
-              сервера.
+              Sends <span className="mono">POST /api/shutdown</span> to gracefully terminate{" "}
+              <span className="mono">ProcessPoolExecutor</span> workers and close the local backend.
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button type="button" className="btn" onClick={() => setConfirmShutdown(false)}>
-                Отмена
+                Cancel
               </button>
               <button
                 type="button"
@@ -104,7 +132,7 @@ export const TopBar: React.FC = () => {
                   void triggerShutdown();
                 }}
               >
-                Остановить сервер
+                Stop Server
               </button>
             </div>
           </div>

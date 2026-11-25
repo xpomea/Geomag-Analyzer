@@ -1,18 +1,16 @@
 import React from "react";
-import { Database, FolderOpen, Power, RefreshCw, X, XCircle } from "lucide-react";
+import { Database, FolderOpen, RefreshCw, X, XCircle } from "lucide-react";
 import { TERMINAL_JOB_STATUSES } from "../../api/client";
 import { useAnalysis } from "../../store/AnalysisContext";
-import { formatBytes, formatEta } from "../../utils/formatters";
+import { formatBytes, formatEta, formatJobStatus } from "../../utils/formatters";
 
 export const JobMonitorPanel: React.FC = () => {
   const {
     state,
     dispatch,
-    health,
     refreshJobsAndCache,
     cancelWtcJob,
     openWtcJobResult,
-    triggerShutdown,
   } = useAnalysis();
 
   if (!state.jobDrawerOpen) return null;
@@ -29,14 +27,14 @@ export const JobMonitorPanel: React.FC = () => {
       <div className="drawer-panel">
         <div className="drawer-header">
           <div style={{ fontWeight: 600, fontSize: 14 }}>
-            Монитор задач Tier 3 и дисковый кэш
+            Tier 3 Job Monitor &amp; Disk Cache
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button
               type="button"
               className="btn btn-sm"
               onClick={() => void refreshJobsAndCache()}
-              title="Обновить список задач и кэша"
+              title="Refresh jobs and cache index"
             >
               <RefreshCw size={13} />
             </button>
@@ -44,6 +42,7 @@ export const JobMonitorPanel: React.FC = () => {
               type="button"
               className="btn btn-sm"
               onClick={() => dispatch({ type: "SET_JOB_DRAWER_OPEN", open: false })}
+              aria-label="Close job monitor"
             >
               <X size={14} />
             </button>
@@ -53,11 +52,11 @@ export const JobMonitorPanel: React.FC = () => {
         <div className="drawer-body">
           <section>
             <div className="sidebar-heading" style={{ marginBottom: 8 }}>
-              <span>Очередь фоновых расчётов ({state.jobs.length})</span>
+              <span>Background Job Queue ({state.jobs.length})</span>
             </div>
 
             {state.jobs.length === 0 ? (
-              <div className="hint-text">Фоновых задач WTC пока не запускалось.</div>
+              <div className="hint-text">No WTC jobs submitted yet.</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {state.jobs.map((job) => {
@@ -87,7 +86,7 @@ export const JobMonitorPanel: React.FC = () => {
                                 : "pill-accent"
                           }`}
                         >
-                          {job.status}
+                          {formatJobStatus(job.status)}
                           {job.cache_hit ? " (hit)" : ""}
                         </span>
                       </div>
@@ -128,7 +127,7 @@ export const JobMonitorPanel: React.FC = () => {
                             onClick={() => void cancelWtcJob(job.job_id)}
                           >
                             <XCircle size={12} />
-                            <span>Отменить</span>
+                            <span>Cancel</span>
                           </button>
                         )}
                         {(job.status === "completed" || job.status === "cached") && (
@@ -141,7 +140,7 @@ export const JobMonitorPanel: React.FC = () => {
                             }}
                           >
                             <FolderOpen size={12} />
-                            <span>Открыть карту WTC</span>
+                            <span>Open WTC Map</span>
                           </button>
                         )}
                       </div>
@@ -156,21 +155,21 @@ export const JobMonitorPanel: React.FC = () => {
             <div className="sidebar-heading" style={{ marginBottom: 8 }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                 <Database size={12} />
-                Индекс кэша runtime.sqlite ({state.cacheEntries.length})
+                Cache Index runtime.sqlite ({state.cacheEntries.length})
               </span>
             </div>
 
             {state.cacheEntries.length === 0 ? (
-              <div className="hint-text">Записей в индексе кэша пока нет.</div>
+              <div className="hint-text">No entries in cache index yet.</div>
             ) : (
               <div style={{ overflowX: "auto" }}>
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Тип</th>
-                      <th>Станция/Пара</th>
-                      <th>Размер</th>
-                      <th>Ключ SHA-256</th>
+                      <th>Type</th>
+                      <th>Station / Pair</th>
+                      <th>Size</th>
+                      <th>SHA-256 Key</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -191,34 +190,6 @@ export const JobMonitorPanel: React.FC = () => {
                 </table>
               </div>
             )}
-          </section>
-
-          <section className="sidebar-section">
-            <div className="sidebar-heading">
-              <span>Управление сервером (режим --browser)</span>
-            </div>
-            <div className="hint-text">
-              При работе через внешний браузер кнопка ниже корректно завершает сервер FastAPI и пул
-              воркеров <span className="mono">ProcessPoolExecutor</span>.
-            </div>
-            <button
-              type="button"
-              className="btn btn-danger"
-              disabled={state.serverStatus !== "running" || health?.can_shutdown === false}
-              title={
-                health?.can_shutdown === false
-                  ? "Остановка сервера доступна только в настольном режиме launcher / --browser"
-                  : "Корректно остановить сервер"
-              }
-              onClick={() => void triggerShutdown()}
-            >
-              <Power size={13} />
-              <span>
-                {health?.can_shutdown === false
-                  ? "Остановка отключена (веб-режим)"
-                  : "Остановить сервер"}
-              </span>
-            </button>
           </section>
         </div>
       </div>

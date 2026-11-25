@@ -316,7 +316,7 @@ export async function rasterizeSvgToPng300Dpi(
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const el = new Image();
       el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error("Не удалось растеризовать SVG в PNG."));
+      el.onerror = () => reject(new Error("Failed to rasterize SVG to PNG."));
       el.src = url;
     });
 
@@ -1277,9 +1277,9 @@ export function buildStationMapSvg(scene: StationMapSvgScene): string {
   const legItems = [
     { x: 14, color: cwColor, label: "CW (V>0, ε>0)" },
     { x: 130, color: ccwColor, label: "CCW (V<0, ε<0)" },
-    { x: 256, color: insigColor, label: "p ≤ p_crit / нет данных" },
+    { x: 256, color: insigColor, label: "p ≤ p_crit / no data" },
     { x: 422, color: mlt12Stroke, label: "MLT = 12" },
-    { x: 504, color: termStroke, label: "Терминатор" },
+    { x: 504, color: termStroke, label: "Terminator" },
   ];
   for (const item of legItems) {
     parts.push(`<circle cx="${item.x}" cy="${legY - 3}" r="4" fill="${item.color}"/>`);

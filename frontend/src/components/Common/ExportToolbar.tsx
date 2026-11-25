@@ -1,6 +1,5 @@
 import React, { useState } from "react";
-import { Download, FileSpreadsheet, Image as ImageIcon, Moon, Sun } from "lucide-react";
-import { useAnalysis } from "../../store/AnalysisContext";
+import { Download, FileSpreadsheet, Image as ImageIcon } from "lucide-react";
 import {
   downloadBlob,
   downloadTextFile,
@@ -24,9 +23,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
   svgHeight = 400,
   getCsv,
   disabled = false,
-  compact = true,
 }) => {
-  const { state, dispatch } = useAnalysis();
   const [busy, setBusy] = useState<"svg" | "png" | "csv" | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
@@ -39,7 +36,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
       if (!svg) return;
       downloadTextFile(`${baseFilename}.svg`, svg, "image/svg+xml;charset=utf-8");
     } catch (err) {
-      setErrMsg(err instanceof Error ? err.message : "Ошибка SVG экспорта");
+      setErrMsg(err instanceof Error ? err.message : "SVG export failed");
     } finally {
       setBusy(null);
     }
@@ -55,7 +52,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
       const blob = await rasterizeSvgToPng300Dpi(svg, svgWidth, svgHeight, 300);
       downloadBlob(`${baseFilename}_300dpi.png`, blob);
     } catch (err) {
-      setErrMsg(err instanceof Error ? err.message : "Ошибка PNG экспорта");
+      setErrMsg(err instanceof Error ? err.message : "PNG export failed");
     } finally {
       setBusy(null);
     }
@@ -70,13 +67,11 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
       if (!csv) return;
       downloadTextFile(`${baseFilename}.csv`, csv, "text/csv;charset=utf-8");
     } catch (err) {
-      setErrMsg(err instanceof Error ? err.message : "Ошибка CSV экспорта");
+      setErrMsg(err instanceof Error ? err.message : "CSV export failed");
     } finally {
       setBusy(null);
     }
   };
-
-  const isLight = state.exportTheme === "light";
 
   return (
     <div className="export-toolbar" title={errMsg ?? undefined}>
@@ -84,31 +79,9 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
         <button
           type="button"
           className="btn btn-sm"
-          disabled={disabled}
-          onClick={() =>
-            dispatch({
-              type: "SET_EXPORT_THEME",
-              theme: isLight ? "dark" : "light",
-            })
-          }
-          title={
-            isLight
-              ? "Тема экспорта: Светлая для диссертации/печати (нажмите для Тёмной)"
-              : "Тема экспорта: Тёмная экранная (нажмите для Светлой)"
-          }
-        >
-          {isLight ? <Sun size={12} color="#f59e0b" /> : <Moon size={12} />}
-          {!compact && <span>{isLight ? "Печать" : "Экран"}</span>}
-        </button>
-      )}
-
-      {getSvg && (
-        <button
-          type="button"
-          className="btn btn-sm"
           disabled={disabled || busy !== null}
           onClick={handleSvg}
-          title="Экспорт векторной графики SVG (для диссертации / Word / Inkscape)"
+          title="Export vector SVG (for thesis / Word / Inkscape)"
         >
           <Download size={12} />
           <span>SVG</span>
@@ -121,7 +94,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
           className="btn btn-sm"
           disabled={disabled || busy !== null}
           onClick={() => void handlePng()}
-          title="Экспорт растрового рисунка PNG 300 DPI"
+          title="Export raster PNG at 300 DPI"
         >
           <ImageIcon size={12} />
           <span>{busy === "png" ? "…" : "PNG 300"}</span>
@@ -134,7 +107,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
           className="btn btn-sm"
           disabled={disabled || busy !== null}
           onClick={handleCsv}
-          title="Экспорт числовых данных и метаданных расчёта в CSV"
+          title="Export numerical data and metadata as CSV"
         >
           <FileSpreadsheet size={12} />
           <span>CSV</span>

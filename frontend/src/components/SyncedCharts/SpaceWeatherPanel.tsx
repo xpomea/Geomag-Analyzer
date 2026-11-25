@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo } from "react";
 import type * as echarts from "echarts";
-import { AlertCircle, Sun } from "lucide-react";
+import { AlertCircle, Info, Sun } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
 import {
@@ -8,7 +8,7 @@ import {
   formatCsvWithMetadata,
   renderEChartsToSvg,
 } from "../../utils/exportUtils";
-import { formatUtcFull } from "../../utils/formatters";
+import { formatSolar1TimeFrame, formatUtcFull } from "../../utils/formatters";
 import { ExportToolbar } from "../Common/ExportToolbar";
 import { CursorOverlayLine } from "./CursorOverlayLine";
 import {
@@ -89,6 +89,15 @@ export const SpaceWeatherPanel: React.FC = () => {
           return `<div class="mono">${header}<br/>${lines.join("<br/>")}</div>`;
         },
       },
+      legend: {
+        top: 2,
+        left: CHART_GRID_LEFT,
+        right: CHART_GRID_RIGHT,
+        itemWidth: 12,
+        itemHeight: 6,
+        itemGap: 10,
+        textStyle: { color: "#94a3b8", fontSize: 10 },
+      },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       dataZoom: [
         {
@@ -100,9 +109,9 @@ export const SpaceWeatherPanel: React.FC = () => {
         },
       ],
       grid: [
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 20, height: 84, containLabel: false },
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 120, height: 84, containLabel: false },
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 220, height: 88, containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "12%", height: "22%", containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "42%", height: "22%", containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "72%", height: "21%", containLabel: false },
       ],
       xAxis: [
         {
@@ -137,7 +146,7 @@ export const SpaceWeatherPanel: React.FC = () => {
         {
           type: "value",
           gridIndex: 0,
-          name: "B [нТл]",
+          name: "B [nT]",
           nameTextStyle: { color: "#94a3b8", fontSize: 10 },
           axisLabel: { color: "#94a3b8", fontSize: 10 },
           splitLine: { lineStyle: { color: "rgba(51,65,85,0.3)" } },
@@ -145,7 +154,7 @@ export const SpaceWeatherPanel: React.FC = () => {
         {
           type: "value",
           gridIndex: 1,
-          name: "Vsw [км/с]",
+          name: "Vsw [km/s]",
           nameTextStyle: { color: "#0ea5e9", fontSize: 10 },
           axisLabel: { color: "#0ea5e9", fontSize: 10 },
           splitLine: { lineStyle: { color: "rgba(51,65,85,0.3)" } },
@@ -154,7 +163,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           type: "value",
           gridIndex: 1,
           position: "right",
-          name: "Pdyn [нПа]",
+          name: "Pdyn [nPa]",
           nameTextStyle: { color: "#f59e0b", fontSize: 10 },
           axisLabel: { color: "#f59e0b", fontSize: 10 },
           splitLine: { show: false },
@@ -162,7 +171,7 @@ export const SpaceWeatherPanel: React.FC = () => {
         {
           type: "value",
           gridIndex: 2,
-          name: "AE [нТл]",
+          name: "AE [nT]",
           nameTextStyle: { color: "#fb7185", fontSize: 10 },
           axisLabel: { color: "#fb7185", fontSize: 10 },
           splitLine: { lineStyle: { color: "rgba(51,65,85,0.3)" } },
@@ -185,6 +194,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 0,
           showSymbol: false,
           lineStyle: { width: 1.4, color: "#f43f5e" },
+          itemStyle: { color: "#f43f5e" },
           data: bzData,
           markLine: {
             silent: true,
@@ -200,6 +210,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 0,
           showSymbol: false,
           lineStyle: { width: 1.1, color: "#94a3b8" },
+          itemStyle: { color: "#94a3b8" },
           data: bMagData,
         },
         {
@@ -209,6 +220,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 1,
           showSymbol: false,
           lineStyle: { width: 1.4, color: "#0ea5e9" },
+          itemStyle: { color: "#0ea5e9" },
           data: vswData,
         },
         {
@@ -218,6 +230,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 2,
           showSymbol: false,
           lineStyle: { width: 1.3, color: "#f59e0b" },
+          itemStyle: { color: "#f59e0b" },
           data: pdynData,
         },
         {
@@ -227,6 +240,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 3,
           showSymbol: false,
           lineStyle: { width: 1.3, color: "#fb7185" },
+          itemStyle: { color: "#fb7185" },
           data: aeData,
         },
         {
@@ -236,6 +250,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 3,
           showSymbol: false,
           lineStyle: { width: 1.0, color: "#fda4af", type: "dashed" },
+          itemStyle: { color: "#fda4af" },
           data: auData,
         },
         {
@@ -245,6 +260,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 3,
           showSymbol: false,
           lineStyle: { width: 1.0, color: "#e11d48", type: "dotted" },
+          itemStyle: { color: "#e11d48" },
           data: alData,
         },
         {
@@ -254,6 +270,7 @@ export const SpaceWeatherPanel: React.FC = () => {
           yAxisIndex: 4,
           showSymbol: false,
           lineStyle: { width: 1.4, color: "#2dd4bf" },
+          itemStyle: { color: "#2dd4bf" },
           data: ouluDeltaData,
         },
       ],
@@ -340,23 +357,33 @@ export const SpaceWeatherPanel: React.FC = () => {
   }, [shiftedSolar1, rawSpaceWeather, state.episodeId, state.solar1ShiftMode, state.refDistanceKm, state.manualLagMin]);
 
   return (
-    <section className="panel-card">
+    <section className="panel-card deck-panel">
       <div className="panel-header">
         <div className="panel-title-group">
           <Sun size={15} color="#f59e0b" />
-          <span>1. Космическая погода: SOLAR-1 · OMNI · OULU NM</span>
+          <span>Space Weather: SOLAR-1 · OMNI · OULU NM</span>
           {shiftedSolar1 && (
-            <span className="pill pill-accent mono">{shiftedSolar1.solar1.time_frame}</span>
+            <span className="pill pill-accent mono">
+              {formatSolar1TimeFrame(state.solar1ShiftMode, shiftedSolar1.meanDelayMin)}
+            </span>
+          )}
+          {shiftedSolar1?.solar1.warning && (
+            <span
+              className="info-tip-badge"
+              title={`SOLAR-1 SWiPS QC note: ${shiftedSolar1.solar1.warning}`}
+            >
+              <Info size={13} />
+            </span>
           )}
         </div>
         <div className="panel-controls">
           {rawSpaceWeather?.omni && !rawSpaceWeather.omni.available && (
             <span className="pill pill-warn">
               <AlertCircle size={12} />
-              <span>OMNI отсутствует для этого эпизода</span>
+              <span>OMNI unavailable for this episode</span>
             </span>
           )}
-          {loadingTimeseries && <span className="pill">Загрузка…</span>}
+          {loadingTimeseries && <span className="pill">Loading…</span>}
           <ExportToolbar
             baseFilename={exportBase}
             getSvg={getExportSvg}
@@ -368,9 +395,9 @@ export const SpaceWeatherPanel: React.FC = () => {
         </div>
       </div>
       <div className="panel-body">
-        <div style={{ position: "relative", height: 332 }}>
-          <div ref={containerRef} className="chart-host" style={{ height: 332 }} />
-          <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={20} bottom={24} />
+        <div className="chart-fill-wrap">
+          <div ref={containerRef} className="chart-host" />
+          <CursorOverlayLine viewRangeMs={state.viewRangeMs} top="12%" bottom="7%" />
         </div>
       </div>
     </section>

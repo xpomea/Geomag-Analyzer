@@ -73,17 +73,17 @@ export interface ScientificHeatmap2DProps {
     stepX?: number;
     stepY?: number;
   } | null;
-  height?: number;
+  height?: number | "auto";
 }
 
 const OFFSCREEN_RASTER_H = 256;
 
 function defaultYFormatter(y: number): string {
   if (y < 0.05) {
-    return `${(y * 1000).toFixed(2)} мГц`;
+    return `${(y * 1000).toFixed(2)} mHz`;
   }
   if (y >= 60) {
-    return `${Math.round(y)} с`;
+    return `${Math.round(y)} s`;
   }
   return y.toFixed(2);
 }
@@ -116,6 +116,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
   const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [width, setWidth] = useState(720);
+  const [measuredHeight, setMeasuredHeight] = useState(280);
   const [hoverInfo, setHoverInfo] = useState<{
     xPx: number;
     yPx: number;
@@ -126,12 +127,19 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
   const dragRef = useRef<{ startX: number; origRange: [number, number] } | null>(null);
   const lastCursorEmitRef = useRef(0);
 
+  const effectiveHeight = height === "auto" ? measuredHeight : height;
+
   useEffect(() => {
     if (!wrapEl) return;
     const ro = new ResizeObserver((entries) => {
-      const nextW = Math.floor(entries[0]?.contentRect.width ?? wrapEl.clientWidth);
+      const rect = entries[0]?.contentRect;
+      const nextW = Math.floor(rect?.width ?? wrapEl.clientWidth);
+      const nextH = Math.floor(rect?.height ?? wrapEl.clientHeight);
       if (nextW > 180) {
         setWidth(nextW);
+      }
+      if (nextH >= 140) {
+        setMeasuredHeight(nextH);
       }
     });
     ro.observe(wrapEl);
@@ -181,7 +189,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
   const plotLeft = CHART_GRID_LEFT;
   const plotRight = Math.max(plotLeft + 40, width - CHART_GRID_RIGHT);
   const plotTop = 14;
-  const plotBottom = Math.max(plotTop + 40, height - 28);
+  const plotBottom = Math.max(plotTop + 40, effectiveHeight - 28);
   const plotW = plotRight - plotLeft;
   const plotH = plotBottom - plotTop;
 
@@ -198,7 +206,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     onViewRangeChange,
   };
 
-  // Native non-passive wheel listener avoids passive-event warnings and blocks page scroll during zoom
   useEffect(() => {
     if (!wrapEl) return;
     const onNativeWheel = (e: WheelEvent) => {
@@ -266,7 +273,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     };
   }, [yBounds, yScaleMode, invertY, plotTop, plotH]);
 
-  // Cached offscreen raster bitmap rebuilt only when heatmap data or color bounds change
   const offscreenCanvas = useMemo<HTMLCanvasElement | null>(() => {
     const nTime = timesMs.length;
     const nY = yValues.length;
@@ -330,7 +336,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     return off;
   }, [timesMs.length, yValues, zMatrix, matrixLayout, zTransform, zLow, zHigh, lut, yToNorm, invertY]);
 
-  // Fast canvas draw: blits cached offscreen raster + draws crisp vector overlays (no cursor dep!)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -339,10 +344,10 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
 
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.floor(width * dpr));
-    canvas.height = Math.max(1, Math.floor(height * dpr));
+    canvas.height = Math.max(1, Math.floor(effectiveHeight * dpr));
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, width, effectiveHeight);
 
     ctx.fillStyle = "#090f1d";
     ctx.fillRect(plotLeft, plotTop, plotW, plotH);
@@ -375,7 +380,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       }
     }
 
-    // Optional band guide lines
     if (bandGuidesY) {
       ctx.lineWidth = 1;
       ctx.setLineDash([5, 4]);
@@ -388,7 +392,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
           ctx.lineTo(plotRight, gy);
           ctx.stroke();
           ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
-          ctx.fillRect(plotLeft + 4, gy - 12, 82, 13);
+          ctx.fillRect(plotLeft + 4, gy - 12, 88, 13);
           ctx.fillStyle = "#e2e8f0";
           ctx.font = "10px 'JetBrains Mono', monospace";
           ctx.fillText(guide.label, plotLeft + 7, gy - 2);
@@ -397,7 +401,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       ctx.setLineDash([]);
     }
 
-    // Optional COI shading and boundary curve closed per contiguous finite run
     if (coiPeriods && coiPeriods.length === nTime && nTime > 1) {
       const outsideEdgeY = invertY ? plotBottom : plotTop;
       ctx.fillStyle = "rgba(15, 23, 42, 0.58)";
@@ -450,7 +453,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       ctx.setLineDash([]);
     }
 
-    // Optional 95% Monte Carlo significance contours (geometric interpolation when yScaleMode='log')
     if (contourSegments.length > 0 && nTime > 1 && nY > 1) {
       ctx.strokeStyle = "#f8fafc";
       ctx.lineWidth = 1.5;
@@ -481,7 +483,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       ctx.stroke();
     }
 
-    // Optional phase arrows (0 deg -> right/in-phase, 90 deg -> up, 180 deg -> left)
     if (phaseVectors && nTime > 0 && nY > 0) {
       let firstVisIdx = 0;
       while (firstVisIdx < nTime && timesMs[firstVisIdx] < vStart) firstVisIdx++;
@@ -538,12 +539,10 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
 
     ctx.restore();
 
-    // Axes frame
     ctx.strokeStyle = "#334155";
     ctx.lineWidth = 1;
     ctx.strokeRect(plotLeft, plotTop, plotW, plotH);
 
-    // Y-axis ticks & label
     ctx.fillStyle = "#94a3b8";
     ctx.font = "10px 'JetBrains Mono', monospace";
     ctx.textAlign = "right";
@@ -569,7 +568,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     ctx.fillText(yLabel, 0, 0);
     ctx.restore();
 
-    // X-axis ticks
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     ctx.fillStyle = "#94a3b8";
@@ -586,7 +584,6 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
       ctx.fillText(formatUtcShort(tMs), px, plotBottom + 7);
     }
 
-    // Colorbar inside right 64px margin
     const cbX = plotRight + 10;
     const cbW = 10;
     for (let row = 0; row < plotH; row++) {
@@ -610,7 +607,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     }
   }, [
     width,
-    height,
+    effectiveHeight,
     plotLeft,
     plotRight,
     plotTop,
@@ -731,7 +728,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
     <div
       ref={setWrapEl}
       className="heatmap-wrapper"
-      style={{ height }}
+      style={height === "auto" ? { flex: 1, minHeight: 150, height: "100%" } : { height }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -768,7 +765,7 @@ export const ScientificHeatmap2D: React.FC<ScientificHeatmap2DProps> = ({
           <div>{formatUtcFull(hoverInfo.utcMs)}</div>
           <div>
             {yFormat(hoverInfo.yVal)} ·{" "}
-            {hoverInfo.zVal !== null ? `${hoverInfo.zVal.toFixed(3)} ${zUnit}` : "нет данных"}
+            {hoverInfo.zVal !== null ? `${hoverInfo.zVal.toFixed(3)} ${zUnit}` : "no data"}
           </div>
         </div>
       )}

@@ -494,8 +494,8 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
       series: Array<{ name: string }>;
     };
     const names = optFiltered.series.map((s) => s.name);
-    expect(names).toContain("Огибающая |Z_X|");
-    expect(names).toContain("Огибающая |Z_Y|");
+    expect(names).toContain("Envelope |Z_X|");
+    expect(names).toContain("Envelope |Z_Y|");
   });
 
   it("DraftNullableNumberInput commits negative decimals and empty->null on Enter/blur", () => {

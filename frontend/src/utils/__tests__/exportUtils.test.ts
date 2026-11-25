@@ -140,7 +140,7 @@ describe("Publication export subsystem (SVG, PNG 300 DPI, CSV, Windows filenames
       dataZoom: [{ type: "inside", xAxisIndex: 0 }],
       grid: { left: 60, right: 40, top: 20, bottom: 25 },
       xAxis: { type: "time", min: t0, max: t1, axisLabel: { color: "#94a3b8" } },
-      yAxis: { type: "value", name: "нТл", axisLabel: { color: "#38bdf8" } },
+      yAxis: { type: "value", name: "nT", axisLabel: { color: "#38bdf8" } },
       series: [
         {
           name: "X",

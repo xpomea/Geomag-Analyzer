@@ -11,8 +11,8 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     return (
       <div className="modal-backdrop">
         <div className="modal-card">
-          <div style={{ fontWeight: 600 }}>Инициализация сессии GeoMag Analyzer…</div>
-          <div className="hint-text">Проверка локального токена и состояния бэкенда.</div>
+          <div style={{ fontWeight: 600 }}>Initializing GeoMag Analyzer session…</div>
+          <div className="hint-text">Verifying local authentication token and backend health.</div>
         </div>
       </div>
     );
@@ -38,12 +38,11 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       <form className="modal-card" onSubmit={handleSubmit}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15 }}>
           <KeyRound size={18} color="var(--accent-primary)" />
-          <span>Требуется локальная авторизация</span>
+          <span>Local Authentication Required</span>
         </div>
         <div className="hint-text">
-          Откройте URL из лаунчера вида{" "}
-          <span className="mono">http://127.0.0.1:PORT/?token=…</span> или введите одноразовый
-          bootstrap-токен ниже.
+          Open the launcher URL <span className="mono">http://127.0.0.1:PORT/?token=…</span> or enter
+          the one-time bootstrap token below.
         </div>
         {auth.error && (
           <div className="banner banner-danger">
@@ -52,18 +51,18 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </div>
         )}
         <label className="field-label">
-          <span>Bootstrap-токен</span>
+          <span>Bootstrap Token</span>
           <input
             type="password"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="Вставьте bootstrap-токен…"
+            placeholder="Paste bootstrap token…"
             autoFocus
           />
         </label>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button type="submit" className="btn btn-primary" disabled={submitting || !tokenInput.trim()}>
-            {submitting ? "Проверка…" : "Подключиться"}
+            {submitting ? "Verifying…" : "Connect"}
           </button>
         </div>
       </form>

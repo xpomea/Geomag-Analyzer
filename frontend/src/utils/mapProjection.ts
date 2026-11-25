@@ -32,7 +32,7 @@ export interface RegionPresetConfig {
 export const MAP_REGION_PRESETS: Record<MapRegionPreset, RegionPresetConfig> = {
   all: {
     id: "all",
-    label: "Все 49 ст. (153°)",
+    label: "All 49 (153°)",
     rotateLon: 47,
     centerLat: 56,
     parallels: [38, 68],
@@ -41,7 +41,7 @@ export const MAP_REGION_PRESETS: Record<MapRegionPreset, RegionPresetConfig> = {
   },
   europe: {
     id: "europe",
-    label: "Европа (37)",
+    label: "Europe (37)",
     rotateLon: -7,
     centerLat: 53,
     parallels: [38, 68],
@@ -50,7 +50,7 @@ export const MAP_REGION_PRESETS: Record<MapRegionPreset, RegionPresetConfig> = {
   },
   flr: {
     id: "flr",
-    label: "Цепочка FLR",
+    label: "FLR Chain",
     rotateLon: -20,
     centerLat: 58,
     parallels: [44, 70],
@@ -59,7 +59,7 @@ export const MAP_REGION_PRESETS: Record<MapRegionPreset, RegionPresetConfig> = {
   },
   canada: {
     id: "canada",
-    label: "Канада (12)",
+    label: "Canada (12)",
     rotateLon: 90,
     centerLat: 59,
     parallels: [46, 70],

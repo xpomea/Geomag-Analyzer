@@ -43,6 +43,15 @@ export const MagnetogramPanel: React.FC = () => {
   const hasFiltered = Boolean(isVariantB && polarizationRaw?.filtered);
   const showFiltered = hasFiltered && state.showFilteredMagnetogram;
 
+  const interpCount = useMemo(() => {
+    if (!geomag) return 0;
+    let count = 0;
+    for (const flag of geomag.is_interpolated) {
+      if (flag) count++;
+    }
+    return count;
+  }, [geomag]);
+
   const option = useMemo<echarts.EChartsCoreOption | null>(() => {
     if (!geomag || !geomag.available || geomag.timestamps_utc.length === 0) {
       return null;
@@ -114,6 +123,7 @@ export const MagnetogramPanel: React.FC = () => {
         type: "line",
         showSymbol: false,
         lineStyle: { width: 1.35, color: "#38bdf8" },
+        itemStyle: { color: "#38bdf8" },
         data: toPairs(xPlot),
         markArea:
           markAreas.length > 0
@@ -125,6 +135,7 @@ export const MagnetogramPanel: React.FC = () => {
         type: "line",
         showSymbol: false,
         lineStyle: { width: 1.35, color: "#a78bfa" },
+        itemStyle: { color: "#a78bfa" },
         data: toPairs(yPlot),
       },
       {
@@ -132,6 +143,7 @@ export const MagnetogramPanel: React.FC = () => {
         type: "line",
         showSymbol: false,
         lineStyle: { width: 1.15, color: "#34d399" },
+        itemStyle: { color: "#34d399" },
         data: toPairs(zPlot),
         markPoint:
           despikedPts.length > 0
@@ -148,19 +160,21 @@ export const MagnetogramPanel: React.FC = () => {
 
     if (showFiltered && envXTop.length === tsMs.length) {
       series.push({
-        name: `Огибающая |Z_${xLabel}|`,
+        name: `Envelope |Z_${xLabel}|`,
         type: "line",
         showSymbol: false,
         lineStyle: { width: 1.1, color: "rgba(56, 189, 248, 0.55)", type: "dashed" },
+        itemStyle: { color: "#38bdf8" },
         data: toPairs(envXTop),
       });
     }
     if (showFiltered && envYTop.length === tsMs.length) {
       series.push({
-        name: `Огибающая |Z_${yLabel}|`,
+        name: `Envelope |Z_${yLabel}|`,
         type: "line",
         showSymbol: false,
         lineStyle: { width: 1.1, color: "rgba(167, 139, 250, 0.55)", type: "dashed" },
+        itemStyle: { color: "#a78bfa" },
         data: toPairs(envYTop),
       });
     }
@@ -181,7 +195,7 @@ export const MagnetogramPanel: React.FC = () => {
           const lines = items.map((it) => {
             const p = it as { seriesName: string; marker: string; value: [number, number | null] };
             const v = p.value?.[1];
-            return `${p.marker} ${p.seriesName}: <b>${typeof v === "number" ? v.toFixed(2) : "—"} нТл</b>`;
+            return `${p.marker} ${p.seriesName}: <b>${typeof v === "number" ? v.toFixed(2) : "—"} nT</b>`;
           });
           return `<div class="mono">${header}<br/>${lines.join("<br/>")}</div>`;
         },
@@ -189,6 +203,8 @@ export const MagnetogramPanel: React.FC = () => {
       legend: {
         top: 2,
         right: CHART_GRID_RIGHT,
+        itemWidth: 12,
+        itemHeight: 6,
         textStyle: { color: "#94a3b8", fontSize: 10 },
       },
       dataZoom: [
@@ -203,7 +219,7 @@ export const MagnetogramPanel: React.FC = () => {
       grid: {
         left: CHART_GRID_LEFT,
         right: CHART_GRID_RIGHT,
-        top: 24,
+        top: 32,
         bottom: 24,
         containLabel: false,
       },
@@ -217,7 +233,7 @@ export const MagnetogramPanel: React.FC = () => {
       },
       yAxis: {
         type: "value",
-        name: "нТл",
+        name: "nT",
         nameTextStyle: { color: "#94a3b8", fontSize: 10 },
         axisLabel: { color: "#94a3b8", fontSize: 10 },
         splitLine: { lineStyle: { color: "rgba(51,65,85,0.3)" } },
@@ -308,14 +324,14 @@ export const MagnetogramPanel: React.FC = () => {
   }, [geomag, polarizationRaw, state.method, state.band]);
 
   return (
-    <section className="panel-card">
+    <section className="panel-card deck-panel">
       <div className="panel-header">
         <div className="panel-title-group">
           <Activity size={15} color="#38bdf8" />
-          <span>2. Магнитометр {state.stationA}: вариации и полосовые ряды</span>
+          <span>Magnetometer {state.stationA}: Variations &amp; Bandpass</span>
           {geomag && (
             <span className="pill mono">
-              {geomag.coord_frame} (D0={geomag.d0_deg.toFixed(2)}°) · валидн. {geomag.valid_pct.toFixed(1)}%
+              {geomag.coord_frame} (D0={geomag.d0_deg.toFixed(2)}°) · valid {geomag.valid_pct.toFixed(1)}%
             </span>
           )}
         </div>
@@ -327,26 +343,28 @@ export const MagnetogramPanel: React.FC = () => {
                 className={!showFiltered ? "active" : ""}
                 onClick={() => dispatch({ type: "SET_SHOW_FILTERED", show: false })}
               >
-                Исходный Δ(X,Y,Z)
+                Raw Δ(X,Y,Z)
               </button>
               <button
                 type="button"
                 className={showFiltered ? "active" : ""}
                 onClick={() => dispatch({ type: "SET_SHOW_FILTERED", show: true })}
               >
-                Фильтр {state.band} + огибающая
+                {state.band} Filter + Envelope
               </button>
             </div>
           )}
-          <span className="pill" style={{ background: "rgba(245,158,11,0.12)", color: "#fcd34d" }}>
-            Интерп. ≤3 мин
-          </span>
-          {polarizationRaw?.trim_hours != null && (
-            <span className="pill" style={{ background: "rgba(100,116,139,0.22)", color: "#cbd5e1" }}>
-              T_cut = {polarizationRaw.trim_hours} ч
+          {interpCount > 0 && (
+            <span className="pill" style={{ background: "rgba(245,158,11,0.12)", color: "#fcd34d" }}>
+              Interp. ≤3 min ({interpCount})
             </span>
           )}
-          {loadingPolarization && <span className="pill">Расчёт…</span>}
+          {polarizationRaw?.trim_hours != null && (
+            <span className="pill" style={{ background: "rgba(100,116,139,0.22)", color: "#cbd5e1" }}>
+              T_cut = {polarizationRaw.trim_hours} h
+            </span>
+          )}
+          {loadingPolarization && <span className="pill">Computing…</span>}
           <ExportToolbar
             baseFilename={exportBase}
             getSvg={getExportSvg}
@@ -362,12 +380,12 @@ export const MagnetogramPanel: React.FC = () => {
         {geomag && !geomag.available ? (
           <div className="banner banner-warn">
             <AlertTriangle size={15} />
-            <span>{geomag.warnings[0] ?? `Станция ${state.stationA} отсутствует в данном эпизоде.`}</span>
+            <span>{geomag.warnings[0] ?? `Station ${state.stationA} is absent in this episode.`}</span>
           </div>
         ) : (
-          <div style={{ position: "relative", height: 225 }}>
-            <div ref={containerRef} className="chart-host" style={{ height: 225 }} />
-            <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={24} bottom={24} />
+          <div className="chart-fill-wrap">
+            <div ref={containerRef} className="chart-host" />
+            <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={32} bottom={24} />
           </div>
         )}
       </div>

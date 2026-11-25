@@ -512,6 +512,8 @@ def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
         port = int(s.getsockname()[1])
 
     env = dict(os.environ)
+    env.pop("GEOMAG_REQUIRE_AUTH", None)
+    env.pop("GEOMAG_BOOTSTRAP_TOKEN", None)
     env["GEOMAG_USER_DATA_DIR"] = str(tmp_path / "uvicorn_user_data")
     env["GEOMAG_STATIC_CACHE_DIR"] = str(tmp_path / "uvicorn_static_cache")
 
@@ -532,6 +534,7 @@ def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
         stderr=subprocess.PIPE,
         env=env,
     )
+    stderr_bytes = b""
     try:
         base_url = f"http://127.0.0.1:{port}"
         ready = False
@@ -551,10 +554,13 @@ def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
     finally:
         proc.terminate()
         try:
-            proc.wait(timeout=5.0)
+            _, stderr_bytes = proc.communicate(timeout=5.0)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait(timeout=5.0)
+            _, stderr_bytes = proc.communicate(timeout=5.0)
+
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+    assert "auto-generated one-time bootstrap token: ?token=" in stderr_text
 
 
 def test_spawn_worker_enforces_single_numba_thread_without_loading_main():

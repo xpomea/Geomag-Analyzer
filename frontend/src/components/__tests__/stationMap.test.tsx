@@ -620,8 +620,8 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
 
     const chainTabBtn = Array.from(host.querySelectorAll("button")).find(
       (b) =>
-        b.textContent?.trim() === "Цепочка FLR" &&
-        b.getAttribute("title")?.includes("меридиональной цепочки"),
+        b.textContent?.trim() === "FLR Chain" &&
+        b.getAttribute("title")?.includes("meridional FLR chain"),
     );
     expect(chainTabBtn).toBeDefined();
     await act(async () => {
@@ -632,7 +632,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     });
 
     const flrBtn = Array.from(host.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Расчёт FLR"),
+      b.textContent?.includes("Compute FLR"),
     );
     expect(flrBtn).toBeDefined();
     await act(async () => {
@@ -731,7 +731,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     });
 
     const netBtn = Array.from(host.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Сеть от LVV"),
+      b.textContent?.includes("Network from LVV"),
     );
     expect(netBtn).toBeDefined();
     act(() => {
@@ -751,7 +751,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     const tooltip = host.querySelector(".map-tooltip");
     expect(tooltip).not.toBeNull();
     expect(tooltip?.textContent).toContain("Δφ=28.5°");
-    expect(tooltip?.textContent).not.toContain("маск.");
+    expect(tooltip?.textContent).not.toContain("masked");
   });
 
   it("drops stale snapshot and matrix arcs immediately when parameters change or snapshot request fails (F-02)", async () => {
@@ -895,7 +895,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
       );
     });
     const netBtn = Array.from(host.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Сеть от LVV"),
+      b.textContent?.includes("Network from LVV"),
     );
     expect(netBtn).toBeDefined();
     act(() => {

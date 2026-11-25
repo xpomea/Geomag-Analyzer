@@ -8,9 +8,9 @@ import {
 
 export interface CursorOverlayLineProps {
   viewRangeMs: [number, number] | null;
-  top: number;
-  bottom?: number;
-  height?: number;
+  top: number | string;
+  bottom?: number | string;
+  height?: number | string;
   borderColor?: string;
 }
 

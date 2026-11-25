@@ -67,7 +67,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             )
             logging.getLogger("geomag_api").info(msg)
             uv_logger = logging.getLogger("uvicorn.error")
-            if uv_logger.handlers:
+            if uv_logger.hasHandlers():
                 uv_logger.info(msg)
         try:
             yield

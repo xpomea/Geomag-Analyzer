@@ -198,4 +198,35 @@ describe("analysisReducer & state guards", () => {
     expect(openedWithD0.externalD0Deg).toBe(5.5);
     expect(openedWithD0.externalD0DegB).toBeNull();
   });
+
+  it("syncs activeDeckTab and activeCrossTab cleanly without changing backend fetch signature", () => {
+    const sig0 = selectBackendFetchSignature(INITIAL_ANALYSIS_STATE);
+    const sWelch = analysisReducer(INITIAL_ANALYSIS_STATE, {
+      type: "SET_ACTIVE_DECK_TAB",
+      tab: "welch",
+    });
+    expect(sWelch.activeDeckTab).toBe("welch");
+    expect(sWelch.activeCrossTab).toBe("welch");
+    expect(selectBackendFetchSignature(sWelch)).toBe(sig0);
+
+    const sStokes = analysisReducer(sWelch, {
+      type: "SET_ACTIVE_DECK_TAB",
+      tab: "stokes",
+    });
+    expect(sStokes.activeDeckTab).toBe("stokes");
+    expect(sStokes.activeCrossTab).toBe("spectrogram");
+    expect(selectBackendFetchSignature(sStokes)).toBe(sig0);
+
+    const sWtc = analysisReducer(sStokes, {
+      type: "OPEN_WTC_JOB",
+      jobId: "wtc-sync",
+      episodeId: INITIAL_ANALYSIS_STATE.episodeId,
+      stationA: "LVV",
+      stationB: "BEL",
+      component: "X",
+      coordFrame: "XYZ",
+    });
+    expect(sWtc.activeDeckTab).toBe("wtc");
+    expect(sWtc.activeCrossTab).toBe("wtc");
+  });
 });

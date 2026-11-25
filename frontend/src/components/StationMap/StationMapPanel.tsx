@@ -5,12 +5,11 @@ import {
   Compass,
   GitBranch,
   Globe2,
+  Layers,
   Maximize2,
   Minimize2,
   Network,
   RotateCcw,
-  Sun,
-  Tag,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -109,7 +108,17 @@ interface ArcRenderNode {
   labelText: string | null;
 }
 
-export const StationMapPanel: React.FC = () => {
+export interface StationMapPanelProps {
+  fillHeight?: boolean;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}
+
+export const StationMapPanel: React.FC<StationMapPanelProps> = ({
+  fillHeight = false,
+  collapsed: collapsedProp,
+  onToggleCollapse,
+}) => {
   const {
     state,
     dispatch,
@@ -122,12 +131,24 @@ export const StationMapPanel: React.FC = () => {
     loadingFlr,
   } = useAnalysis();
 
-  const [collapsed, setCollapsed] = useState(false);
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const collapsed = collapsedProp ?? internalCollapsed;
+  const handleToggleCollapsed = () => {
+    if (onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      setInternalCollapsed((v) => !v);
+    }
+  };
+
   const [expanded, setExpanded] = useState(false);
   const [regionPreset, setRegionPreset] = useState<MapRegionPreset>("all");
   const [projectionType, setProjectionType] = useState<MapProjectionType>("lcc");
   const [interactionMode, setInteractionMode] = useState<"pair" | "chain">("pair");
   const [pendingStart, setPendingStart] = useState<string | null>(null);
+
+  const [layersOpen, setLayersOpen] = useState(false);
+  const layersWrapRef = useRef<HTMLDivElement | null>(null);
 
   const [showTerminator, setShowTerminator] = useState(true);
   const [showEllipses, setShowEllipses] = useState(true);
@@ -150,17 +171,34 @@ export const StationMapPanel: React.FC = () => {
 
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
   const [stageWidth, setStageWidth] = useState(880);
+  const [stageHeight, setStageHeight] = useState(280);
   const [hoveredStation, setHoveredStation] = useState<string | null>(null);
   const [hoveredOulu, setHoveredOulu] = useState(false);
   const [hoveredArcKey, setHoveredArcKey] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
   useEffect(() => {
+    if (!layersOpen) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (layersWrapRef.current && !layersWrapRef.current.contains(e.target as Node)) {
+        setLayersOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [layersOpen]);
+
+  useEffect(() => {
     if (!stageEl) return;
     const ro = new ResizeObserver((entries) => {
-      const nextW = Math.floor(entries[0]?.contentRect.width ?? stageEl.clientWidth);
+      const rect = entries[0]?.contentRect;
+      const nextW = Math.floor(rect?.width ?? stageEl.clientWidth);
+      const nextH = Math.floor(rect?.height ?? stageEl.clientHeight);
       if (nextW >= 240) {
         setStageWidth(nextW);
+      }
+      if (nextH >= 140) {
+        setStageHeight(nextH);
       }
     });
     ro.observe(stageEl);
@@ -178,7 +216,7 @@ export const StationMapPanel: React.FC = () => {
     return () => stageEl.removeEventListener("wheel", onWheel);
   }, [stageEl]);
 
-  const mapHeight = expanded ? 520 : regionPreset === "all" ? 390 : 410;
+  const mapHeight = fillHeight ? stageHeight : expanded ? 520 : 380;
 
   const {
     effectiveCursorMs,
@@ -321,7 +359,6 @@ export const StationMapPanel: React.FC = () => {
         });
       }
 
-      // Build coherence arcs
       const arcNodes: ArcRenderNode[] = [];
       const seenPairs = new Set<string>();
       const addArc = (
@@ -396,7 +433,7 @@ export const StationMapPanel: React.FC = () => {
               metrics.azimuthalM !== null
                 ? ` m=${metrics.azimuthalM.toFixed(1)}`
                 : metrics.isMeridionalGuarded
-                  ? " (мерид.)"
+                  ? " (merid.)"
                   : "";
             labelText = `${codeI}–${codeJ}: ${gStr}${pStr}${mStr}`;
           } else {
@@ -416,7 +453,6 @@ export const StationMapPanel: React.FC = () => {
       };
 
       if (showArcs) {
-        // 1. Active pair A <-> B
         if (state.stationA !== state.stationB) {
           addArc(state.stationA, state.stationB, {
             gamma2: pairMetricsAtCursor?.gamma2 ?? null,
@@ -429,7 +465,6 @@ export const StationMapPanel: React.FC = () => {
           });
         }
 
-        // 2. FLR meridional chain arcs when loaded or in chain mode
         if (flrProfile && flrProfile.station_codes.length >= 2) {
           for (let i = 0; i < flrProfile.station_codes.length - 1; i++) {
             addArc(flrProfile.station_codes[i], flrProfile.station_codes[i + 1], {
@@ -450,7 +485,6 @@ export const StationMapPanel: React.FC = () => {
           }
         }
 
-        // 3. Optional matrix arcs from station A
         for (const edge of matrixArcsFromA) {
           addArc(edge.stationI, edge.stationJ, {
             gamma2: edge.gamma2,
@@ -461,7 +495,6 @@ export const StationMapPanel: React.FC = () => {
         }
       }
 
-      // Astronomy layers
       let nightPolyPathD: string | null = null;
       let terminatorPathD: string | null = null;
       let mlt12PathD: string | null = null;
@@ -893,13 +926,16 @@ export const StationMapPanel: React.FC = () => {
   const ccwCount = liveScene.stationNodes.filter((n) => n.geometry.sense === "CCW").length;
 
   return (
-    <section className="panel-card" data-testid="station-map-panel">
+    <section
+      className={`panel-card ${fillHeight && !collapsed ? "map-panel-fill" : ""}`}
+      data-testid="station-map-panel"
+    >
       <div className="panel-header">
         <div className="panel-title-group">
           <Globe2 size={15} color="#38bdf8" />
-          <span>0. Офлайн-карта сети INTERMAGNET (49 станций, D3-geo)</span>
+          <span>INTERMAGNET Network Map</span>
           <span className="pill mono">
-            {sigCount}/{liveScene.stationNodes.length} знач. (CW:{cwCount} · CCW:{ccwCount})
+            {sigCount}/{liveScene.stationNodes.length} sig. (CW:{cwCount} · CCW:{ccwCount})
           </span>
           {snapshotWindow && (
             <span className="pill pill-accent mono">
@@ -908,7 +944,7 @@ export const StationMapPanel: React.FC = () => {
             </span>
           )}
           {(loadingSnapshot || loadingPair || loadingMatrix) && (
-            <span className="pill">Обновление…</span>
+            <span className="pill">Updating…</span>
           )}
         </div>
 
@@ -921,19 +957,22 @@ export const StationMapPanel: React.FC = () => {
             getCsv={getMapExportCsv}
             disabled={liveScene.stationNodes.length === 0}
           />
+          {!fillHeight && (
+            <button
+              type="button"
+              className="btn btn-sm btn-icon"
+              onClick={() => setExpanded((v) => !v)}
+              title={expanded ? "Restore map height" : "Increase map height"}
+            >
+              {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            </button>
+          )}
           <button
             type="button"
-            className="btn btn-sm"
-            onClick={() => setExpanded((v) => !v)}
-            title={expanded ? "Обычный размер карты" : "Увеличить высоту карты"}
-          >
-            {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setCollapsed((v) => !v)}
-            title={collapsed ? "Развернуть карту" : "Свернуть карту"}
+            className="btn btn-sm btn-icon"
+            onClick={handleToggleCollapsed}
+            title={collapsed ? "Expand network map" : "Collapse network map"}
+            aria-label={collapsed ? "Expand network map" : "Collapse network map"}
           >
             {collapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
           </button>
@@ -960,26 +999,26 @@ export const StationMapPanel: React.FC = () => {
               ))}
             </div>
 
-            <div className="segmented" style={{ width: 170 }}>
+            <div className="segmented" style={{ width: 112 }}>
               <button
                 type="button"
                 className={projectionType === "lcc" ? "active" : ""}
                 onClick={() => setProjectionType("lcc")}
-                title="Равноугольная коническая проекция Ламберта"
+                title="Lambert Conformal Conic projection"
               >
-                Ламберт LCC
+                LCC
               </button>
               <button
                 type="button"
                 className={projectionType === "laea" ? "active" : ""}
                 onClick={() => setProjectionType("laea")}
-                title="Азимутальная равновеликая проекция Ламберта"
+                title="Lambert Azimuthal Equal-Area projection"
               >
                 LAEA
               </button>
             </div>
 
-            <div className="segmented" style={{ width: 196 }}>
+            <div className="segmented" style={{ width: 168 }}>
               <button
                 type="button"
                 className={interactionMode === "pair" ? "active" : ""}
@@ -987,20 +1026,21 @@ export const StationMapPanel: React.FC = () => {
                   setInteractionMode("pair");
                   setPendingStart(null);
                 }}
-                title="Клик по 2 станциям выбирает пару (Запад→Восток) для кросс-спектра"
+                title="Click 2 stations to select a West→East pair for cross-spectral analysis"
               >
-                Пара (A↔B)
+                Pair (A↔B)
               </button>
               <button
                 type="button"
+                data-testid="map-mode-chain"
                 className={interactionMode === "chain" ? "active" : ""}
                 onClick={() => {
                   setInteractionMode("chain");
                   setPendingStart(null);
                 }}
-                title="Клик добавляет/убирает станции из меридиональной цепочки FLR"
+                title="Click stations to add or remove from meridional FLR chain"
               >
-                Цепочка FLR
+                FLR Chain
               </button>
             </div>
 
@@ -1015,17 +1055,19 @@ export const StationMapPanel: React.FC = () => {
                       chain: DEFAULT_MERIDIONAL_CHAIN,
                     })
                   }
+                  title="Reset meridional chain to HRN..PEG"
                 >
                   <GitBranch size={12} />
                   <span>HRN..PEG</span>
                 </button>
                 <button
                   type="button"
+                  data-testid="map-compute-flr"
                   className="btn btn-sm btn-primary"
                   disabled={loadingFlr}
                   onClick={() => void loadFlrAtCursor(matrixWindowIndex)}
                 >
-                  {loadingFlr ? "FLR…" : "Расчёт FLR"}
+                  {loadingFlr ? "FLR…" : "Compute FLR"}
                 </button>
               </div>
             )}
@@ -1033,87 +1075,108 @@ export const StationMapPanel: React.FC = () => {
             <div className="quick-chips">
               <button
                 type="button"
-                className={`chip-btn ${showTerminator ? "active" : ""}`}
-                onClick={() => setShowTerminator((v) => !v)}
-                title="Показать терминатор день/ночь и меридиан MLT = 12"
-              >
-                <Sun size={11} style={{ marginRight: 3, verticalAlign: "-1px" }} />
-                Терминатор + MLT=12
-              </button>
-              <button
-                type="button"
                 className={`chip-btn ${showEllipses ? "active" : ""}`}
                 onClick={() => setShowEllipses((v) => !v)}
               >
                 <Compass size={11} style={{ marginRight: 3, verticalAlign: "-1px" }} />
-                Эллипсы
+                Ellipses
               </button>
               <button
                 type="button"
-                className={`chip-btn ${ellipseSizeMode === "log" ? "active" : ""}`}
-                onClick={() => setEllipseSizeMode((m) => (m === "log" ? "sqrt" : "log"))}
-                title="Масштаб размера эллипсов по мощности I"
-              >
-                R ∝ {ellipseSizeMode === "log" ? "log(I)" : "√I"}
-              </button>
-              <button
-                type="button"
-                className={`chip-btn ${showArcs ? "active" : ""}`}
-                onClick={() => setShowArcs((v) => !v)}
-              >
-                Дуги γ²
-              </button>
-              <button
-                type="button"
+                data-testid="map-toggle-matrix-arcs"
                 className={`chip-btn ${showMatrixArcs ? "active" : ""}`}
                 onClick={() => setShowMatrixArcs((v) => !v)}
-                title="Показать все статистически значимые дуги от станции A"
+                title={`Show all statistically significant coherence arcs from ${state.stationA}`}
               >
                 <Network size={11} style={{ marginRight: 3, verticalAlign: "-1px" }} />
-                Сеть от {state.stationA}
+                Network from {state.stationA}
               </button>
+            </div>
+
+            <div className="map-popover-wrap" ref={layersWrapRef}>
               <button
                 type="button"
-                className={`chip-btn ${showOulu ? "active" : ""}`}
-                onClick={() => setShowOulu((v) => !v)}
+                className={`btn btn-sm ${layersOpen ? "btn-primary" : ""}`}
+                onClick={() => setLayersOpen((v) => !v)}
+                aria-expanded={layersOpen}
               >
-                OULU NM
+                <Layers size={12} />
+                <span>Layers</span>
+                <ChevronDown size={11} />
               </button>
-              <button
-                type="button"
-                className={`chip-btn ${showAllLabels ? "active" : ""}`}
-                onClick={() => setShowAllLabels((v) => !v)}
-              >
-                <Tag size={11} style={{ marginRight: 3, verticalAlign: "-1px" }} />
-                Все подписи
-              </button>
+
+              {layersOpen && (
+                <div className="map-popover">
+                  <button
+                    type="button"
+                    className={`map-popover-item ${showTerminator ? "active" : ""}`}
+                    onClick={() => setShowTerminator((v) => !v)}
+                  >
+                    <span>Terminator + MLT=12</span>
+                    <span className="mono">{showTerminator ? "ON" : "OFF"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`map-popover-item ${showArcs ? "active" : ""}`}
+                    onClick={() => setShowArcs((v) => !v)}
+                  >
+                    <span>Coherence Arcs (γ²)</span>
+                    <span className="mono">{showArcs ? "ON" : "OFF"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`map-popover-item ${showOulu ? "active" : ""}`}
+                    onClick={() => setShowOulu((v) => !v)}
+                  >
+                    <span>OULU Neutron Monitor</span>
+                    <span className="mono">{showOulu ? "ON" : "OFF"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`map-popover-item ${showAllLabels ? "active" : ""}`}
+                    onClick={() => setShowAllLabels((v) => !v)}
+                  >
+                    <span>All Station Labels</span>
+                    <span className="mono">{showAllLabels ? "ON" : "OFF"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="map-popover-item active"
+                    onClick={() => setEllipseSizeMode((m) => (m === "log" ? "sqrt" : "log"))}
+                    title="Toggle polarization ellipse radius scaling by power I"
+                  >
+                    <span>Ellipse Radius Scale</span>
+                    <span className="mono">{ellipseSizeMode === "log" ? "log(I)" : "√I"}</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
               <button
                 type="button"
-                className="btn btn-sm"
+                className="btn btn-sm btn-icon"
                 onClick={() => setZoomScale((z) => Math.min(8, z * 1.25))}
-                title="Приблизить"
+                title="Zoom in"
               >
                 <ZoomIn size={12} />
               </button>
               <button
                 type="button"
-                className="btn btn-sm"
+                className="btn btn-sm btn-icon"
                 onClick={() => setZoomScale((z) => Math.max(0.7, z * 0.8))}
-                title="Отдалить"
+                title="Zoom out"
               >
                 <ZoomOut size={12} />
               </button>
               <button
                 type="button"
-                className="btn btn-sm"
+                className="btn btn-sm btn-icon"
                 onClick={() => {
                   setZoomScale(1);
                   setPanOffset({ x: 0, y: 0 });
                 }}
-                title="Сбросить масштаб"
+                title="Reset zoom and pan"
               >
                 <RotateCcw size={12} />
               </button>
@@ -1121,22 +1184,22 @@ export const StationMapPanel: React.FC = () => {
           </div>
 
           {pendingStart && (
-            <div className="banner banner-info" style={{ padding: "5px 10px" }}>
+            <div className="banner banner-info" style={{ padding: "4px 10px" }}>
               <span>
-                Выбрана первая станция пары: <b className="mono">{pendingStart}</b>. Нажмите вторую
-                станцию на карте (повторный клик на {pendingStart} отменит выбор).
+                First station selected: <b className="mono">{pendingStart}</b>. Click a second
+                station on the map (click {pendingStart} again to cancel).
               </span>
             </div>
           )}
 
           {snapshotError && (
-            <div className="banner banner-danger" style={{ padding: "5px 10px" }}>
+            <div className="banner banner-danger" style={{ padding: "4px 10px" }}>
               {snapshotError}
             </div>
           )}
 
           {flrError && (
-            <div className="banner banner-danger" data-testid="map-flr-error" style={{ padding: "5px 10px" }}>
+            <div className="banner banner-danger" data-testid="map-flr-error" style={{ padding: "4px 10px" }}>
               FLR: {flrError}
             </div>
           )}
@@ -1144,7 +1207,7 @@ export const StationMapPanel: React.FC = () => {
           <div
             ref={setStageEl}
             className="map-stage"
-            style={{ height: mapHeight }}
+            style={fillHeight ? undefined : { height: mapHeight }}
             onMouseDown={handleStageMouseDown}
             onMouseMove={handleStageMouseMove}
             onMouseUp={handleStageMouseUp}
@@ -1161,7 +1224,7 @@ export const StationMapPanel: React.FC = () => {
               height={mapHeight}
               viewBox={`0 0 ${stageWidth} ${mapHeight}`}
               role="img"
-              aria-label="Интерактивная карта 49 геомагнитных станций INTERMAGNET"
+              aria-label="Interactive map of 49 INTERMAGNET geomagnetic observatories"
             >
               <defs>
                 <clipPath id="live-map-clip">
@@ -1298,7 +1361,6 @@ export const StationMapPanel: React.FC = () => {
                   </g>
                 )}
 
-                {/* Coherence arcs */}
                 {showArcs &&
                   liveScene.arcNodes.map((arc) => {
                     const col = coherenceArcColor(
@@ -1362,7 +1424,6 @@ export const StationMapPanel: React.FC = () => {
                     );
                   })}
 
-                {/* OULU Neutron Monitor */}
                 {showOulu && liveScene.ouluPos && (
                   <g
                     onMouseEnter={() => {
@@ -1381,7 +1442,6 @@ export const StationMapPanel: React.FC = () => {
                   </g>
                 )}
 
-                {/* 49 Magnetometer stations & Stokes ellipses */}
                 {liveScene.stationNodes.map((n) => {
                   const g = n.geometry;
                   const senseCol =
@@ -1510,7 +1570,6 @@ export const StationMapPanel: React.FC = () => {
                   );
                 })}
 
-                {/* Labels */}
                 {liveScene.labels.map((lbl) => (
                   <text
                     key={`lbl-${lbl.code}`}
@@ -1530,7 +1589,36 @@ export const StationMapPanel: React.FC = () => {
               </g>
             </svg>
 
-            {/* Hover Tooltip */}
+            <div className="map-legend-overlay">
+              <span className="map-legend-item">
+                <span className="legend-dot" style={{ background: "#f43f5e" }} />
+                CW (V&gt;0, ε&gt;0)
+              </span>
+              <span className="map-legend-item">
+                <span className="legend-dot" style={{ background: "#38bdf8" }} />
+                CCW (V&lt;0, ε&lt;0)
+              </span>
+              <span className="map-legend-item">
+                <span className="legend-dot" style={{ background: "#a78bfa" }} />
+                Linear (|ε|&lt;0.05)
+              </span>
+              <span className="map-legend-item">
+                <span className="legend-dot" style={{ background: "#64748b" }} />
+                p ≤ p_crit / no data
+              </span>
+              <span className="map-legend-item">
+                <span className="legend-dot" style={{ background: "#fbbf24" }} />
+                MLT=12 (IGRF-14)
+              </span>
+              <span className="map-legend-item">
+                <span className="legend-dot" style={{ background: "#2dd4bf" }} />
+                OULU NM
+              </span>
+              <span className="hint-text" style={{ marginLeft: "auto" }}>
+                Click 2 stations: pair (W→E) · Scroll/drag: zoom/pan
+              </span>
+            </div>
+
             {hoveredStationNode && (
               <div
                 className="map-tooltip mono"
@@ -1549,7 +1637,7 @@ export const StationMapPanel: React.FC = () => {
                 <div>
                   MLat: {hoveredStationNode.mlatDeg.toFixed(1)}° · MLT:{" "}
                   {formatMltHours(hoveredStationNode.mltHours)} ·{" "}
-                  {hoveredStationNode.meta.has_baseline ? "Полное поле" : "Variation (без базы)"}
+                  {hoveredStationNode.meta.has_baseline ? "Full-field" : "Variation-only"}
                 </div>
                 {state.coordFrame === "XmYm" && hoveredStationNode.meta.has_baseline && (
                   <div>D₀ = {hoveredStationNode.d0Deg.toFixed(2)}°</div>
@@ -1557,7 +1645,7 @@ export const StationMapPanel: React.FC = () => {
                 {hoveredStationNode.stokes ? (
                   <div style={{ marginTop: 4, borderTop: "1px solid var(--border-subtle)", paddingTop: 4 }}>
                     <div>
-                      I={formatNum(hoveredStationNode.stokes.I, 1)} нТл² · p=
+                      I={formatNum(hoveredStationNode.stokes.I, 1)} nT² · p=
                       {formatNum(hoveredStationNode.stokes.p)} (p_crit=
                       {formatNum(hoveredStationNode.stokes.p_crit)})
                     </div>
@@ -1572,8 +1660,8 @@ export const StationMapPanel: React.FC = () => {
                   <div style={{ marginTop: 4, color: "var(--warn)" }}>
                     {hoveredStationNode.warning ??
                       (hoveredStationNode.available
-                        ? "Недостаточно валидных сегментов"
-                        : "Нет данных в этом эпизоде")}
+                        ? "Insufficient valid segments"
+                        : "No data in this episode")}
                   </div>
                 )}
               </div>
@@ -1595,7 +1683,7 @@ export const StationMapPanel: React.FC = () => {
                   {ouluMeta.cutoff_rigidity_gv ?? "0.8"} GV
                 </div>
                 {ouluValAtCursor !== null && (
-                  <div>ΔN/N₀ у курсора: {ouluValAtCursor.toFixed(2)}%</div>
+                  <div>ΔN/N₀ at cursor: {ouluValAtCursor.toFixed(2)}%</div>
                 )}
               </div>
             )}
@@ -1609,10 +1697,10 @@ export const StationMapPanel: React.FC = () => {
                 }}
               >
                 <div style={{ fontWeight: 700, color: "var(--accent-primary)" }}>
-                  Дуга {hoveredArcNode.metrics.stationI} ↔ {hoveredArcNode.metrics.stationJ}
+                  Arc {hoveredArcNode.metrics.stationI} ↔ {hoveredArcNode.metrics.stationJ}
                 </div>
                 <div>
-                  Дистанция: {hoveredArcNode.metrics.distanceKm.toFixed(0)} км · Δλ=
+                  Distance: {hoveredArcNode.metrics.distanceKm.toFixed(0)} km · Δλ=
                   {hoveredArcNode.metrics.deltaLonDeg.toFixed(2)}°
                 </div>
                 <div>
@@ -1623,44 +1711,14 @@ export const StationMapPanel: React.FC = () => {
                   Δφ=
                   {hoveredArcNode.metrics.phaseDegMasked !== null
                     ? `${hoveredArcNode.metrics.phaseDegMasked.toFixed(1)}°`
-                    : "маск."}
+                    : "masked"}
                   {" · "}
                   {hoveredArcNode.metrics.isMeridionalGuarded
-                    ? "меридиональная защита m (|Δλ|<3°)"
+                    ? "meridional guard (|Δλ| < 3°)"
                     : `m=${formatNum(hoveredArcNode.metrics.azimuthalM, 2)} (|m_alias|=${formatNum(hoveredArcNode.metrics.mAlias, 1)})`}
                 </div>
               </div>
             )}
-          </div>
-
-          <div className="map-legend">
-            <span className="map-legend-item">
-              <span className="legend-dot" style={{ background: "#f43f5e" }} />
-              CW (V &gt; 0, ε &gt; 0)
-            </span>
-            <span className="map-legend-item">
-              <span className="legend-dot" style={{ background: "#38bdf8" }} />
-              CCW (V &lt; 0, ε &lt; 0)
-            </span>
-            <span className="map-legend-item">
-              <span className="legend-dot" style={{ background: "#a78bfa" }} />
-              Линейная (|ε| &lt; 0.05)
-            </span>
-            <span className="map-legend-item">
-              <span className="legend-dot" style={{ background: "#64748b" }} />
-              p ≤ p_crit / нет данных
-            </span>
-            <span className="map-legend-item">
-              <span className="legend-dot" style={{ background: "#fbbf24" }} />
-              MLT = 12 (диполь IGRF-14)
-            </span>
-            <span className="map-legend-item">
-              <span className="legend-dot" style={{ background: "#2dd4bf" }} />
-              OULU NM
-            </span>
-            <span className="hint-text" style={{ marginLeft: "auto" }}>
-              Клик 1 → Клик 2: выбор пары (Запад→Восток) · Колесо/перетаскивание: зум/панорама
-            </span>
           </div>
         </div>
       )}

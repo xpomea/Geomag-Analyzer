@@ -1,14 +1,16 @@
 import React, { useCallback, useMemo, useState } from "react";
 import type * as echarts from "echarts";
 import { Eye, EyeOff, Waves } from "lucide-react";
+import type { Polarization3DOut, Stokes2DOut } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
+import type { MaskedPolarizationView } from "../../utils/masking";
 import {
   buildExportFilename,
   formatCsvWithMetadata,
   renderEChartsToSvg,
 } from "../../utils/exportUtils";
-import { formatNum, formatUtcFull } from "../../utils/formatters";
+import { formatNum, formatUtcFull, formatUtcShort } from "../../utils/formatters";
 import { ExportToolbar } from "../Common/ExportToolbar";
 import { CursorOverlayLine } from "./CursorOverlayLine";
 import {
@@ -16,6 +18,186 @@ import {
   CHART_GRID_RIGHT,
   useSyncedEChart,
 } from "./useSyncedEChart";
+
+interface StokesSummaryBarProps {
+  s2: Stokes2DOut;
+  p3: Polarization3DOut | null;
+  maskedPolarization: MaskedPolarizationView;
+  alpha: number;
+  nEffFallback: number | null | undefined;
+}
+
+const StokesSummaryBar: React.FC<StokesSummaryBarProps> = ({
+  s2,
+  p3,
+  maskedPolarization,
+  alpha,
+  nEffFallback,
+}) => {
+  const { cursorUtcMs } = useCursor();
+  const [scope, setScope] = useState<"episode" | "cursor">("episode");
+
+  const cursorMetrics = useMemo(() => {
+    const dyn = maskedPolarization.dynamic;
+    if (!dyn || dyn.timestamps_utc.length === 0) return null;
+    const targetMs = cursorUtcMs ?? Date.parse(dyn.timestamps_utc[0]);
+    let bestIdx = 0;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < dyn.timestamps_utc.length; i++) {
+      const diff = Math.abs(Date.parse(dyn.timestamps_utc[i]) - targetMs);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+    const pVal = dyn.p[bestIdx] ?? null;
+    const pCritVal = dyn.p_crit[bestIdx] ?? null;
+    const g2Val = dyn.gamma2[bestIdx] ?? null;
+    const g2CritVal = dyn.gamma2_crit[bestIdx] ?? null;
+    const isSigP =
+      Boolean(dyn.is_significant_p[bestIdx]) ||
+      (pVal !== null && pCritVal !== null && pVal > pCritVal);
+    const isSigG2 = g2Val !== null && g2CritVal !== null && g2Val > g2CritVal;
+
+    return {
+      tsMs: Date.parse(dyn.timestamps_utc[bestIdx]),
+      I: dyn.I[bestIdx] ?? null,
+      p: pVal,
+      pCrit: pCritVal,
+      isSigP,
+      psi: maskedPolarization.psiSig[bestIdx] ?? null,
+      chi: maskedPolarization.chiSig[bestIdx] ?? null,
+      eps: maskedPolarization.epsSig[bestIdx] ?? null,
+      gamma2: g2Val,
+      gamma2Crit: g2CritVal,
+      isSigG2,
+      nEff: dyn.n_eff[bestIdx] ?? nEffFallback,
+    };
+  }, [maskedPolarization, cursorUtcMs, nEffFallback]);
+
+  const showCursor = scope === "cursor" && cursorMetrics !== null;
+
+  return (
+    <div className="stokes-summary-bar">
+      <div className="segmented" style={{ width: 148, flexShrink: 0 }}>
+        <button
+          type="button"
+          className={scope === "episode" ? "active" : ""}
+          onClick={() => setScope("episode")}
+          title="Show overall polarization summary across the episode"
+        >
+          Episode
+        </button>
+        <button
+          type="button"
+          className={scope === "cursor" ? "active" : ""}
+          onClick={() => setScope("cursor")}
+          title="Show dynamic polarization values at the nearest UTC cursor window"
+        >
+          At Cursor
+        </button>
+      </div>
+
+      {showCursor && cursorMetrics ? (
+        <>
+          <div className="summary-metric">
+            <span className="kpi-label">Window UTC</span>
+            <span className="kpi-val">{formatUtcShort(cursorMetrics.tsMs)}</span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Power I</span>
+            <span className="kpi-val">{formatNum(cursorMetrics.I, 2)} nT²</span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Degree p / p_crit</span>
+            <span className="kpi-val">
+              {formatNum(cursorMetrics.p)} / {formatNum(cursorMetrics.pCrit)}
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Azimuth ψ</span>
+            <span className="kpi-val">
+              {cursorMetrics.isSigP && cursorMetrics.psi !== null
+                ? `${formatNum(cursorMetrics.psi, 1)}°`
+                : "masked"}
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Ellipticity ε (χ)</span>
+            <span className="kpi-val">
+              {cursorMetrics.isSigP && cursorMetrics.eps !== null
+                ? `${formatNum(cursorMetrics.eps)} (${formatNum(cursorMetrics.chi, 1)}°)`
+                : "masked"}
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Coherence γ²</span>
+            <span className="kpi-val">
+              {formatNum(cursorMetrics.gamma2)} ({cursorMetrics.isSigG2 ? ">" : "≤"}{" "}
+              {formatNum(cursorMetrics.gamma2Crit)})
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">n_eff (α={alpha})</span>
+            <span className="kpi-val">{formatNum(cursorMetrics.nEff, 1)}</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="summary-metric">
+            <span className="kpi-label">Power I</span>
+            <span className="kpi-val">{formatNum(s2.I, 2)} nT²</span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Degree p / p_crit</span>
+            <span className="kpi-val">
+              {formatNum(s2.p)} / {formatNum(s2.p_crit)}
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Azimuth ψ</span>
+            <span className="kpi-val">
+              {s2.is_significant_p ? `${formatNum(s2.psi_deg, 1)}°` : "masked"}
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Ellipticity ε (χ)</span>
+            <span className="kpi-val">
+              {s2.is_significant_p
+                ? `${formatNum(s2.epsilon)} (${formatNum(s2.chi_deg, 1)}°)`
+                : "masked"}
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">Coherence γ²</span>
+            <span className="kpi-val">
+              {formatNum(s2.gamma2)} ({s2.is_significant_gamma2 ? ">" : "≤"}{" "}
+              {formatNum(s2.gamma2_crit)})
+            </span>
+          </div>
+          <div className="summary-metric">
+            <span className="kpi-label">n_eff (α={alpha})</span>
+            <span className="kpi-val">{formatNum(s2.n_eff ?? nEffFallback, 1)}</span>
+          </div>
+          {p3 && (
+            <>
+              <div className="summary-metric">
+                <span className="kpi-label">3D Samson P</span>
+                <span className="kpi-val">{formatNum(p3.P)}</span>
+              </div>
+              <div className="summary-metric">
+                <span className="kpi-label">Means θ / b/a</span>
+                <span className="kpi-val">
+                  {formatNum(p3.theta_deg, 1)}° / {formatNum(p3.b_over_a)}
+                </span>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
 
 export const StokesPanel: React.FC = () => {
   const {
@@ -60,21 +242,23 @@ export const StokesPanel: React.FC = () => {
 
     const series: Record<string, unknown>[] = [
       {
-        name: logI ? "log10(I)" : "I [нТл²]",
+        name: logI ? "log10(I)" : "I [nT²]",
         type: "line",
         xAxisIndex: 0,
         yAxisIndex: 0,
         showSymbol: false,
         lineStyle: { width: 1.3, color: "#38bdf8" },
+        itemStyle: { color: "#38bdf8" },
         data: toPairs(iPlot),
       },
       {
-        name: "p (степень поляриз.)",
+        name: "p (deg. of pol.)",
         type: "line",
         xAxisIndex: 0,
         yAxisIndex: 1,
         showSymbol: false,
         lineStyle: { width: 1.6, color: "#fbbf24" },
+        itemStyle: { color: "#fbbf24" },
         data: toPairs(dyn.p),
       },
       {
@@ -84,10 +268,11 @@ export const StokesPanel: React.FC = () => {
         yAxisIndex: 1,
         showSymbol: false,
         lineStyle: { width: 1.3, color: "#ef4444", type: "dashed" },
+        itemStyle: { color: "#ef4444" },
         data: toPairs(dyn.p_crit),
       },
       {
-        name: "ψ [°] (значим.)",
+        name: "ψ [°] (sig.)",
         type: "line",
         xAxisIndex: 1,
         yAxisIndex: 2,
@@ -103,7 +288,7 @@ export const StokesPanel: React.FC = () => {
             : undefined,
       },
       {
-        name: "χ [°] (значим.)",
+        name: "χ [°] (sig.)",
         type: "line",
         xAxisIndex: 1,
         yAxisIndex: 3,
@@ -143,6 +328,7 @@ export const StokesPanel: React.FC = () => {
         yAxisIndex: 5,
         showSymbol: false,
         lineStyle: { width: 1.35, color: "#fb7185" },
+        itemStyle: { color: "#fb7185" },
         data: toPairs(dyn.gamma2),
       },
       {
@@ -152,6 +338,7 @@ export const StokesPanel: React.FC = () => {
         yAxisIndex: 5,
         showSymbol: false,
         lineStyle: { width: 1.2, color: "#f87171", type: "dotted" },
+        itemStyle: { color: "#f87171" },
         data: toPairs(dyn.gamma2_crit),
       },
     ];
@@ -159,23 +346,25 @@ export const StokesPanel: React.FC = () => {
     if (state.showNoiseGhost) {
       series.push(
         {
-          name: "ψ (шум p<p_crit)",
+          name: "ψ (noise p<p_crit)",
           type: "line",
           xAxisIndex: 1,
           yAxisIndex: 2,
           showSymbol: false,
           connectNulls: false,
           lineStyle: { width: 1.0, color: "rgba(167, 139, 250, 0.25)", type: "dotted" },
+          itemStyle: { color: "rgba(167, 139, 250, 0.35)" },
           data: toPairs(maskedPolarization.psiNoiseGhost),
         },
         {
-          name: "ε (шум p<p_crit)",
+          name: "ε (noise p<p_crit)",
           type: "line",
           xAxisIndex: 2,
           yAxisIndex: 4,
           showSymbol: false,
           connectNulls: false,
           lineStyle: { width: 1.0, color: "rgba(45, 212, 191, 0.25)", type: "dotted" },
+          itemStyle: { color: "rgba(45, 212, 191, 0.35)" },
           data: toPairs(maskedPolarization.epsNoiseGhost),
         },
       );
@@ -198,10 +387,19 @@ export const StokesPanel: React.FC = () => {
           const lines = items.map((it) => {
             const p = it as { seriesName: string; marker: string; value: [number, number | null] };
             const v = p.value?.[1];
-            return `${p.marker} ${p.seriesName}: <b>${typeof v === "number" ? v.toFixed(3) : "маск."}</b>`;
+            return `${p.marker} ${p.seriesName}: <b>${typeof v === "number" ? v.toFixed(3) : "masked"}</b>`;
           });
           return `<div class="mono">${header}<br/>${lines.join("<br/>")}</div>`;
         },
+      },
+      legend: {
+        top: 2,
+        left: CHART_GRID_LEFT,
+        right: CHART_GRID_RIGHT,
+        itemWidth: 11,
+        itemHeight: 6,
+        itemGap: 8,
+        textStyle: { color: "#94a3b8", fontSize: 10 },
       },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       dataZoom: [
@@ -214,9 +412,9 @@ export const StokesPanel: React.FC = () => {
         },
       ],
       grid: [
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 20, height: 84, containLabel: false },
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 120, height: 84, containLabel: false },
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 220, height: 84, containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "12%", height: "22%", containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "42%", height: "22%", containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "72%", height: "21%", containLabel: false },
       ],
       xAxis: [
         {
@@ -251,7 +449,7 @@ export const StokesPanel: React.FC = () => {
         {
           type: "value",
           gridIndex: 0,
-          name: logI ? "log I" : "I [нТл²]",
+          name: logI ? "log I" : "I [nT²]",
           nameTextStyle: { color: "#38bdf8", fontSize: 10 },
           axisLabel: { color: "#38bdf8", fontSize: 10 },
           splitLine: { lineStyle: { color: "rgba(51,65,85,0.3)" } },
@@ -424,11 +622,11 @@ export const StokesPanel: React.FC = () => {
   ]);
 
   return (
-    <section className="panel-card">
+    <section className="panel-card deck-panel">
       <div className="panel-header">
         <div className="panel-title-group">
           <Waves size={15} color="#a78bfa" />
-          <span>3. Поляризация Стокса 2D/3D (p, p_crit, ψ, χ, ε, γ²)</span>
+          <span>Stokes Polarization 2D/3D — {state.stationA}</span>
           {s2 && (
             <span className={`pill mono ${s2.is_significant_p ? "pill-ok" : "pill-warn"}`}>
               p = {formatNum(s2.p)} {s2.is_significant_p ? ">" : "≤"} p_crit ({formatNum(s2.p_crit)})
@@ -442,7 +640,7 @@ export const StokesPanel: React.FC = () => {
             className={`btn btn-sm ${logI ? "btn-primary" : ""}`}
             onClick={() => setLogI((v) => !v)}
           >
-            {logI ? "I: log10" : "I: линейн."}
+            {logI ? "I: log10" : "I: linear"}
           </button>
           <button
             type="button"
@@ -452,7 +650,7 @@ export const StokesPanel: React.FC = () => {
             }
           >
             {state.showNoiseGhost ? <Eye size={13} /> : <EyeOff size={13} />}
-            <span>{state.showNoiseGhost ? "Скрыть шум p<p_crit" : "Показать шум бледно"}</span>
+            <span>{state.showNoiseGhost ? "Hide noise p < p_crit" : "Show faint noise"}</span>
           </button>
           <ExportToolbar
             baseFilename={exportBase}
@@ -468,65 +666,25 @@ export const StokesPanel: React.FC = () => {
       <div className="panel-body">
         {polarizationError && <div className="banner banner-danger">{polarizationError}</div>}
 
-        {s2 && (
-          <div className="kpi-strip">
-            <div className="kpi-box">
-              <div className="kpi-label">Мощность I</div>
-              <div className="kpi-val">{formatNum(s2.I, 2)} нТл²</div>
-            </div>
-            <div className="kpi-box">
-              <div className="kpi-label">Степень p / p_crit</div>
-              <div className="kpi-val">
-                {formatNum(s2.p)} / {formatNum(s2.p_crit)}
-              </div>
-            </div>
-            <div className="kpi-box">
-              <div className="kpi-label">Азимут ψ</div>
-              <div className="kpi-val">{s2.is_significant_p ? `${formatNum(s2.psi_deg, 1)}°` : "маск."}</div>
-            </div>
-            <div className="kpi-box">
-              <div className="kpi-label">Эллипт. ε (χ)</div>
-              <div className="kpi-val">
-                {s2.is_significant_p
-                  ? `${formatNum(s2.epsilon)} (${formatNum(s2.chi_deg, 1)}°)`
-                  : "маск."}
-              </div>
-            </div>
-            <div className="kpi-box">
-              <div className="kpi-label">Когерент. γ²</div>
-              <div className="kpi-val">
-                {formatNum(s2.gamma2)} (
-                {s2.is_significant_gamma2 ? ">" : "≤"} {formatNum(s2.gamma2_crit)})
-              </div>
-            </div>
-            <div className="kpi-box">
-              <div className="kpi-label">n_eff (α={state.alpha})</div>
-              <div className="kpi-val">{formatNum(s2.n_eff ?? polarizationRaw?.n_eff, 1)}</div>
-            </div>
-            {p3 && (
-              <>
-                <div className="kpi-box">
-                  <div className="kpi-label">3D Самсон P</div>
-                  <div className="kpi-val">{formatNum(p3.P)}</div>
-                </div>
-                <div className="kpi-box">
-                  <div className="kpi-label">Минс θ / b/a</div>
-                  <div className="kpi-val">
-                    {formatNum(p3.theta_deg, 1)}° / {formatNum(p3.b_over_a)}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+        {s2 && maskedPolarization && (
+          <StokesSummaryBar
+            s2={s2}
+            p3={p3}
+            maskedPolarization={maskedPolarization}
+            alpha={state.alpha}
+            nEffFallback={polarizationRaw?.n_eff}
+          />
         )}
 
         {option ? (
-          <div style={{ position: "relative", height: 328 }}>
-            <div ref={containerRef} className="chart-host" style={{ height: 328 }} />
-            <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={20} bottom={24} />
+          <div className="chart-fill-wrap">
+            <div ref={containerRef} className="chart-host" />
+            <CursorOverlayLine viewRangeMs={state.viewRangeMs} top="12%" bottom="7%" />
           </div>
         ) : (
-          <div className="empty-note">Нет валидных окон Стокса для текущей станции и параметров.</div>
+          <div className="empty-note">
+            No valid Stokes windows for the current station and parameters.
+          </div>
         )}
       </div>
     </section>

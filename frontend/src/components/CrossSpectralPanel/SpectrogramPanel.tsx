@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
+import { RadioReceiver } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
 import {
@@ -28,11 +29,11 @@ export const SpectrogramPanel: React.FC = () => {
 
   const bandGuides = useMemo<BandGuide[]>(
     () => [
-      { value: 1 / 600, label: "Pc5/Pc6 600с", color: "rgba(56, 189, 248, 0.85)" },
-      { value: 1 / 150, label: "Pc5 150с", color: "rgba(248, 250, 252, 0.78)" },
+      { value: 1 / 600, label: "Pc5/Pc6 600s", color: "rgba(56, 189, 248, 0.85)" },
+      { value: 1 / 150, label: "Pc5 150s", color: "rgba(248, 250, 252, 0.78)" },
       {
         value: 1 / state.tMaxPc6Sec,
-        label: `Pc6 ${state.tMaxPc6Sec}с`,
+        label: `Pc6 ${state.tMaxPc6Sec}s`,
         color: "rgba(167, 139, 250, 0.8)",
       },
     ],
@@ -90,27 +91,19 @@ export const SpectrogramPanel: React.FC = () => {
     );
   }, [spec, matrix, state.episodeId, state.stationA, compMode, state.coordFrame, state.L, state.M, state.windowSamples, state.stepSamples]);
 
-  if (loadingPolarization && !spec) {
-    return <div className="empty-note">Расчёт динамической спектрограммы Уэлча…</div>;
-  }
-
-  if (!spec || spec.timestamps_utc.length === 0 || spec.freqs_hz.length === 0) {
-    return (
-      <div className="empty-note">
-        Спектрограмма недоступна (недостаточно отсчётов в окне или станция отсутствует).
-      </div>
-    );
-  }
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <div className="hint-text">
-          Односторонний спектр мощности Уэлча (L={state.L}, M={state.M}, окно={state.windowSamples} мин).
-          Шкала: <span className="mono">log10(нТл²/Гц)</span>.
+    <section className="panel-card deck-panel">
+      <div className="panel-header">
+        <div className="panel-title-group">
+          <RadioReceiver size={15} color="#2dd4bf" />
+          <span>Welch Dynamic Spectrogram — {state.stationA}</span>
+          <span className="pill mono">
+            L={state.L}, M={state.M}, win={state.windowSamples} min · log10(nT²/Hz)
+          </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <div className="segmented" style={{ width: 280 }}>
+
+        <div className="panel-controls">
+          <div className="segmented" style={{ width: 220 }}>
             <button
               type="button"
               className={compMode === "total" ? "active" : ""}
@@ -139,29 +132,40 @@ export const SpectrogramPanel: React.FC = () => {
             svgWidth={900}
             svgHeight={330}
             getCsv={getExportCsv}
+            disabled={!spec || spec.timestamps_utc.length === 0 || spec.freqs_hz.length === 0}
           />
         </div>
       </div>
 
-      <ScientificHeatmap2D
-        timestampsUtc={spec.timestamps_utc}
-        yValues={spec.freqs_hz}
-        yLabel="Частота"
-        yScaleMode="linear"
-        zMatrix={matrix}
-        matrixLayout="time-by-y"
-        zTransform="log10"
-        zUnit="logP"
-        colormap="viridis"
-        viewRangeMs={state.viewRangeMs}
-        boundsMs={episodeBoundsMs}
-        onViewRangeChange={(rangeMs) =>
-          dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs })
-        }
-        onCursorChange={setCursorUtcMs}
-        bandGuidesY={bandGuides}
-        height={255}
-      />
-    </div>
+      <div className="panel-body">
+        {loadingPolarization && !spec ? (
+          <div className="empty-note">Computing Welch dynamic spectrogram…</div>
+        ) : !spec || spec.timestamps_utc.length === 0 || spec.freqs_hz.length === 0 ? (
+          <div className="empty-note">
+            Spectrogram unavailable (insufficient valid samples or station absent).
+          </div>
+        ) : (
+          <ScientificHeatmap2D
+            timestampsUtc={spec.timestamps_utc}
+            yValues={spec.freqs_hz}
+            yLabel="Frequency"
+            yScaleMode="linear"
+            zMatrix={matrix}
+            matrixLayout="time-by-y"
+            zTransform="log10"
+            zUnit="logP"
+            colormap="viridis"
+            viewRangeMs={state.viewRangeMs}
+            boundsMs={episodeBoundsMs}
+            onViewRangeChange={(rangeMs) =>
+              dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs })
+            }
+            onCursorChange={setCursorUtcMs}
+            bandGuidesY={bandGuides}
+            height="auto"
+          />
+        )}
+      </div>
+    </section>
   );
 };

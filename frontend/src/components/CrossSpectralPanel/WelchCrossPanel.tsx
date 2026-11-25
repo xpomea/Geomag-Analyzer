@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as echarts from "echarts";
-import { ArrowLeftRight, ChevronDown, ChevronUp, Database, GitBranch } from "lucide-react";
+import { ArrowLeftRight, Database, GitBranch, RadioReceiver } from "lucide-react";
 import type { CrossComponent } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
@@ -37,7 +37,6 @@ export const WelchCrossPanel: React.FC = () => {
   const { setCursorUtcMs } = useCursor();
 
   const [tfMode, setTfMode] = useState<"coherence" | "phase">("coherence");
-  const [flrOpen, setFlrOpen] = useState(false);
 
   const availableComponents: CrossComponent[] =
     state.coordFrame === "XmYm" ? ["Xm", "Ym", "Z"] : ["X", "Y", "Z"];
@@ -70,10 +69,19 @@ export const WelchCrossPanel: React.FC = () => {
           const lines = items.map((it) => {
             const p = it as { seriesName: string; marker: string; value: [number, number | null] };
             const v = p.value?.[1];
-            return `${p.marker} ${p.seriesName}: <b>${typeof v === "number" ? v.toFixed(3) : "маск."}</b>`;
+            return `${p.marker} ${p.seriesName}: <b>${typeof v === "number" ? v.toFixed(3) : "masked"}</b>`;
           });
           return `<div class="mono">${header}<br/>${lines.join("<br/>")}</div>`;
         },
+      },
+      legend: {
+        top: 2,
+        left: CHART_GRID_LEFT,
+        right: CHART_GRID_RIGHT,
+        itemWidth: 11,
+        itemHeight: 6,
+        itemGap: 8,
+        textStyle: { color: "#94a3b8", fontSize: 10 },
       },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       dataZoom: [
@@ -86,8 +94,8 @@ export const WelchCrossPanel: React.FC = () => {
         },
       ],
       grid: [
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 18, height: 76, containLabel: false },
-        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: 112, height: 76, containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "16%", height: "33%", containLabel: false },
+        { left: CHART_GRID_LEFT, right: CHART_GRID_RIGHT, top: "59%", height: "31%", containLabel: false },
       ],
       xAxis: [
         {
@@ -142,12 +150,13 @@ export const WelchCrossPanel: React.FC = () => {
       ],
       series: [
         {
-          name: "γ²_12 (Уэлч)",
+          name: "γ²_12 (Welch)",
           type: "line",
           xAxisIndex: 0,
           yAxisIndex: 0,
           showSymbol: false,
           lineStyle: { width: 1.5, color: "#38bdf8" },
+          itemStyle: { color: "#38bdf8" },
           data: toPairs(welchPairRaw.gamma2),
         },
         {
@@ -157,10 +166,11 @@ export const WelchCrossPanel: React.FC = () => {
           yAxisIndex: 0,
           showSymbol: false,
           lineStyle: { width: 1.3, color: "#ef4444", type: "dashed" },
+          itemStyle: { color: "#ef4444" },
           data: toPairs(maskedWelch.gamma2Crit),
         },
         {
-          name: "Δφ_12 (значим.)",
+          name: "Δφ_12 (sig.)",
           type: "line",
           xAxisIndex: 1,
           yAxisIndex: 1,
@@ -172,7 +182,7 @@ export const WelchCrossPanel: React.FC = () => {
           data: toPairs(maskedWelch.phaseDegMasked),
         },
         {
-          name: "Азимутальн. число m",
+          name: "Azimuthal m",
           type: "line",
           xAxisIndex: 1,
           yAxisIndex: 2,
@@ -196,7 +206,6 @@ export const WelchCrossPanel: React.FC = () => {
     onCursorChange: setCursorUtcMs,
   });
 
-  // Separate non-time ECharts chart for Meridional FLR profile (callback-ref safe)
   const flrOption = useMemo<echarts.EChartsCoreOption | null>(() => {
     if (!flrProfile) return null;
     return {
@@ -212,19 +221,19 @@ export const WelchCrossPanel: React.FC = () => {
         top: 2,
         textStyle: { color: "#94a3b8", fontSize: 10 },
       },
-      grid: { left: 60, right: 60, top: 28, bottom: 32 },
+      grid: { left: 54, right: 54, top: 32, bottom: 28 },
       xAxis: {
         type: "category",
         data: flrProfile.station_codes.map(
           (c, i) => `${c} (${flrProfile.latitudes_deg[i]?.toFixed(1)}°)`,
         ),
-        axisLabel: { color: "#94a3b8", fontSize: 10 },
+        axisLabel: { color: "#94a3b8", fontSize: 9.5, rotate: 20 },
         axisLine: { lineStyle: { color: "#334155" } },
       },
       yAxis: [
         {
           type: "value",
-          name: "Амплитуда",
+          name: "Amplitude",
           nameTextStyle: { color: "#38bdf8", fontSize: 10 },
           axisLabel: { color: "#38bdf8", fontSize: 10 },
           splitLine: { lineStyle: { color: "rgba(51,65,85,0.3)" } },
@@ -232,7 +241,7 @@ export const WelchCrossPanel: React.FC = () => {
         {
           type: "value",
           position: "right",
-          name: "Накопл. фаза [°]",
+          name: "Cumul. Phase [°]",
           nameTextStyle: { color: "#f59e0b", fontSize: 10 },
           axisLabel: { color: "#f59e0b", fontSize: 10 },
           splitLine: { show: false },
@@ -240,7 +249,7 @@ export const WelchCrossPanel: React.FC = () => {
       ],
       series: [
         {
-          name: "Амплитуда полосы",
+          name: "Band Amplitude",
           type: "line",
           yAxisIndex: 0,
           symbolSize: 7,
@@ -249,7 +258,7 @@ export const WelchCrossPanel: React.FC = () => {
           data: flrProfile.amplitude,
         },
         {
-          name: "Накопленная фаза [°]",
+          name: "Cumulative Phase [°]",
           type: "line",
           yAxisIndex: 1,
           symbolSize: 6,
@@ -264,7 +273,7 @@ export const WelchCrossPanel: React.FC = () => {
 
   const [flrHostEl, setFlrHostEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!flrHostEl || !flrOption || !flrOpen) return;
+    if (!flrHostEl || !flrOption) return;
     const chart = echarts.init(flrHostEl);
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(flrHostEl);
@@ -274,10 +283,10 @@ export const WelchCrossPanel: React.FC = () => {
       ro.disconnect();
       chart.dispose();
     };
-  }, [flrHostEl, flrOption, flrOpen]);
+  }, [flrHostEl, flrOption]);
 
   const bandGuides = useMemo<BandGuide[]>(
-    () => [{ value: 1 / 600, label: "600с", color: "rgba(248, 250, 252, 0.72)" }],
+    () => [{ value: 1 / 600, label: "600s", color: "rgba(248, 250, 252, 0.72)" }],
     [],
   );
 
@@ -417,17 +426,11 @@ export const WelchCrossPanel: React.FC = () => {
   }, [flrProfile, state.alpha]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+    <section className="panel-card deck-panel">
+      <div className="panel-header">
+        <div className="panel-title-group">
+          <RadioReceiver size={15} color="#2dd4bf" />
+          <span>Cross-Welch Coherence &amp; FLR</span>
           <span className="pill pill-accent mono">
             {state.stationA} ↔ {state.stationB}
           </span>
@@ -443,7 +446,7 @@ export const WelchCrossPanel: React.FC = () => {
             }
           >
             <ArrowLeftRight size={12} />
-            <span>Поменять</span>
+            <span>Swap</span>
           </button>
 
           <div className="segmented">
@@ -470,18 +473,18 @@ export const WelchCrossPanel: React.FC = () => {
             ))}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="panel-controls">
           {welchPairRaw?.azimuthal && (
             <span
               className={`pill mono ${welchPairRaw.azimuthal.is_meridional_guarded ? "pill-warn" : ""}`}
             >
               Δλ = {welchPairRaw.azimuthal.delta_lon_deg.toFixed(2)}°
               {welchPairRaw.azimuthal.is_meridional_guarded
-                ? " (мерид. защита m)"
+                ? " (merid. guard)"
                 : ` · |m_alias| = ${formatNum(welchPairRaw.azimuthal.m_alias, 1)}`}
             </span>
           )}
-          {loadingWelch && <span className="pill">Расчёт Уэлча…</span>}
+          {loadingWelch && <span className="pill">Computing Welch…</span>}
           <ExportToolbar
             baseFilename={pairExportBase}
             getSvg={getPairExportSvg}
@@ -493,170 +496,167 @@ export const WelchCrossPanel: React.FC = () => {
         </div>
       </div>
 
-      {welchError && <div className="banner banner-danger">{welchError}</div>}
+      <div className="panel-body">
+        {welchError && <div className="banner banner-danger">{welchError}</div>}
 
-      {welchPairRaw && !welchPairRaw.available && (
-        <div className="banner banner-warn">
-          {welchPairRaw.warnings.join(" ") || "Одна из станций пары отсутствует в эпизоде."}
-        </div>
-      )}
-
-      {option1D && (
-        <div style={{ position: "relative", height: 224 }}>
-          <div ref={containerRef} className="chart-host" style={{ height: 224 }} />
-          <CursorOverlayLine viewRangeMs={state.viewRangeMs} top={18} bottom={24} />
-        </div>
-      )}
-
-      {welchPairRaw && welchPairRaw.available && maskedWelch && welchPairRaw.freqs_hz.length > 0 && (
-        <>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-              gap: 8,
-            }}
-          >
-            <span className="hint-text">
-              2D частотно-временная карта пары ({welchPairRaw.station_i}–{welchPairRaw.station_j}),
-              α = {state.alpha}
-            </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div className="segmented" style={{ width: 290 }}>
-                <button
-                  type="button"
-                  className={tfMode === "coherence" ? "active" : ""}
-                  onClick={() => setTfMode("coherence")}
-                >
-                  Когерентность γ²(t, f)
-                </button>
-                <button
-                  type="button"
-                  className={tfMode === "phase" ? "active" : ""}
-                  onClick={() => setTfMode("phase")}
-                >
-                  Фаза Δφ(t, f) (α-маска)
-                </button>
-              </div>
-              <ExportToolbar
-                baseFilename={`${pairExportBase}_${tfMode}_2d`}
-                getSvg={getTfHeatmapSvg}
-                svgWidth={900}
-                svgHeight={290}
-              />
-            </div>
-          </div>
-
-          <ScientificHeatmap2D
-            timestampsUtc={welchPairRaw.window_timestamps_utc}
-            yValues={welchPairRaw.freqs_hz}
-            yLabel="Частота"
-            yScaleMode="linear"
-            zMatrix={tfMode === "coherence" ? welchPairRaw.gamma2_tf : maskedWelch.phaseDegTfMasked}
-            matrixLayout="time-by-y"
-            zMin={tfMode === "coherence" ? 0 : -180}
-            zMax={tfMode === "coherence" ? 1 : 180}
-            zUnit={tfMode === "coherence" ? "γ²" : "°"}
-            colormap={tfMode === "coherence" ? "turbo" : "phase"}
-            viewRangeMs={state.viewRangeMs}
-            boundsMs={episodeBoundsMs}
-            onViewRangeChange={(rangeMs) =>
-              dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs })
-            }
-            onCursorChange={setCursorUtcMs}
-            bandGuidesY={bandGuides}
-            height={210}
-          />
-        </>
-      )}
-
-      <div
-        style={{
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-md)",
-          padding: 8,
-          background: "rgba(15, 23, 42, 0.45)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 8,
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <GitBranch size={14} color="var(--accent-primary)" />
-            <span style={{ fontWeight: 600, fontSize: 12 }}>
-              Меридиональный профиль FLR ({state.meridionalChain.join(" → ")})
-            </span>
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={loadingFlr}
-              onClick={() => {
-                setFlrOpen(true);
-                void loadFlrAtCursor();
-              }}
-            >
-              {loadingFlr ? "Расчёт FLR…" : "Рассчитать FLR у курсора"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setFlrOpen((v) => !v)}
-            >
-              {flrOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            </button>
-          </div>
-        </div>
-
-        {flrError && (
-          <div className="banner banner-danger" style={{ marginTop: 8 }}>
-            {flrError}
+        {welchPairRaw && !welchPairRaw.available && (
+          <div className="banner banner-warn">
+            {welchPairRaw.warnings.join(" ") || "One of the pair stations is absent in this episode."}
           </div>
         )}
 
-        {flrOpen && flrProfile && (
-          <div style={{ marginTop: 8 }}>
+        <div className="welch-split">
+          <div className="welch-left-col">
+            {option1D ? (
+              <div className="chart-fill-wrap" style={{ minHeight: 165 }}>
+                <div ref={containerRef} className="chart-host" />
+                <CursorOverlayLine viewRangeMs={state.viewRangeMs} top="16%" bottom="10%" />
+              </div>
+            ) : (
+              <div className="empty-note">
+                {loadingWelch
+                  ? "Computing cross-Welch coherence and phase…"
+                  : "Cross-Welch pair series unavailable for current selection."}
+              </div>
+            )}
+
+            {welchPairRaw && welchPairRaw.available && maskedWelch && welchPairRaw.freqs_hz.length > 0 && (
+              <div style={{ flex: 1.05, minHeight: 185, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: 6,
+                    flexShrink: 0,
+                  }}
+                >
+                  <span className="hint-text">
+                    2D Time-Frequency ({welchPairRaw.station_i}–{welchPairRaw.station_j}), α = {state.alpha}
+                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <div className="segmented" style={{ width: 250 }}>
+                      <button
+                        type="button"
+                        className={tfMode === "coherence" ? "active" : ""}
+                        onClick={() => setTfMode("coherence")}
+                      >
+                        Coherence γ²(t, f)
+                      </button>
+                      <button
+                        type="button"
+                        className={tfMode === "phase" ? "active" : ""}
+                        onClick={() => setTfMode("phase")}
+                      >
+                        Phase Δφ(t, f) (α-masked)
+                      </button>
+                    </div>
+                    <ExportToolbar
+                      baseFilename={`${pairExportBase}_${tfMode}_2d`}
+                      getSvg={getTfHeatmapSvg}
+                      svgWidth={900}
+                      svgHeight={290}
+                    />
+                  </div>
+                </div>
+
+                <ScientificHeatmap2D
+                  timestampsUtc={welchPairRaw.window_timestamps_utc}
+                  yValues={welchPairRaw.freqs_hz}
+                  yLabel="Frequency"
+                  yScaleMode="linear"
+                  zMatrix={tfMode === "coherence" ? welchPairRaw.gamma2_tf : maskedWelch.phaseDegTfMasked}
+                  matrixLayout="time-by-y"
+                  zMin={tfMode === "coherence" ? 0 : -180}
+                  zMax={tfMode === "coherence" ? 1 : 180}
+                  zUnit={tfMode === "coherence" ? "γ²" : "°"}
+                  colormap={tfMode === "coherence" ? "turbo" : "phase"}
+                  viewRangeMs={state.viewRangeMs}
+                  boundsMs={episodeBoundsMs}
+                  onViewRangeChange={(rangeMs) =>
+                    dispatch({ type: "SET_VIEW_RANGE", rangeMs, boundsMs: episodeBoundsMs })
+                  }
+                  onCursorChange={setCursorUtcMs}
+                  bandGuidesY={bandGuides}
+                  height="auto"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="welch-right-col">
             <div
               style={{
                 display: "flex",
-                justifyContent: "space-between",
                 alignItems: "center",
-                gap: 8,
-                flexWrap: "wrap",
-                marginBottom: 6,
+                justifyContent: "space-between",
+                gap: 6,
+                flexShrink: 0,
               }}
             >
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <span className="pill pill-accent mono">Окно: {flrProfile.window_timestamp_utc}</span>
-                <span className="pill mono">α = {state.alpha}</span>
-                <span className="pill pill-ok mono">
-                  Пик амплитуды: {flrProfile.peak_station} ({formatNum(flrProfile.peak_latitude_deg, 2)}°N)
-                </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <GitBranch size={14} color="var(--accent-primary)" />
+                <span style={{ fontWeight: 600, fontSize: 12 }}>Meridional FLR Profile</span>
               </div>
-              <ExportToolbar
-                baseFilename={buildExportFilename(
-                  ["flr_profile", flrProfile.episode_id, flrProfile.band, flrProfile.window_timestamp_utc],
-                  "svg",
-                ).replace(/\.svg$/, "")}
-                getSvg={getFlrExportSvg}
-                svgWidth={880}
-                svgHeight={260}
-                getCsv={getFlrExportCsv}
-              />
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={loadingFlr}
+                onClick={() => void loadFlrAtCursor()}
+              >
+                {loadingFlr ? "Computing FLR…" : "Compute FLR at Cursor"}
+              </button>
             </div>
-            <div ref={setFlrHostEl} style={{ width: "100%", height: 220 }} />
+
+            <div className="hint-text mono" style={{ flexShrink: 0 }}>
+              Chain: {state.meridionalChain.join(" → ")}
+            </div>
+
+            {flrError && <div className="banner banner-danger">{flrError}</div>}
+
+            {flrProfile ? (
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 6,
+                    flexWrap: "wrap",
+                    flexShrink: 0,
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <span className="pill pill-accent mono">
+                      Window: {flrProfile.window_timestamp_utc}
+                    </span>
+                    <span className="pill pill-ok mono">
+                      Peak: {flrProfile.peak_station} ({formatNum(flrProfile.peak_latitude_deg, 2)}°N)
+                    </span>
+                  </div>
+                  <ExportToolbar
+                    baseFilename={buildExportFilename(
+                      ["flr_profile", flrProfile.episode_id, flrProfile.band, flrProfile.window_timestamp_utc],
+                      "svg",
+                    ).replace(/\.svg$/, "")}
+                    getSvg={getFlrExportSvg}
+                    svgWidth={880}
+                    svgHeight={260}
+                    getCsv={getFlrExportCsv}
+                  />
+                </div>
+                <div ref={setFlrHostEl} style={{ width: "100%", flex: 1, minHeight: 160 }} />
+              </>
+            ) : (
+              <div className="empty-note" style={{ margin: "auto" }}>
+                Click &ldquo;Compute FLR at Cursor&rdquo; to evaluate band amplitude and cumulative
+                phase gradient along the meridional chain.
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
-    </div>
+    </section>
   );
 };

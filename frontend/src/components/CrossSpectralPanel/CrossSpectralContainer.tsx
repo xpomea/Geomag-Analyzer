@@ -13,7 +13,7 @@ export const CrossSpectralContainer: React.FC = () => {
       <div className="panel-header">
         <div className="panel-title-group">
           <RadioReceiver size={15} color="#2dd4bf" />
-          <span>4. Динамическая спектрограмма и кросс-спектральный анализ (Tier 2 / Tier 3)</span>
+          <span>Dynamic Spectrogram &amp; Cross-Spectral Analysis (Tier 2 / Tier 3)</span>
         </div>
       </div>
 
@@ -23,21 +23,21 @@ export const CrossSpectralContainer: React.FC = () => {
           className={`tab-btn ${state.activeCrossTab === "spectrogram" ? "active" : ""}`}
           onClick={() => dispatch({ type: "SET_ACTIVE_CROSS_TAB", tab: "spectrogram" })}
         >
-          Спектрограмма {state.stationA}
+          Spectrogram {state.stationA}
         </button>
         <button
           type="button"
           className={`tab-btn ${state.activeCrossTab === "welch" ? "active" : ""}`}
           onClick={() => dispatch({ type: "SET_ACTIVE_CROSS_TAB", tab: "welch" })}
         >
-          Кросс-Уэлч γ² / Δφ / m / FLR ({state.stationA}↔{state.stationB})
+          Cross-Welch γ² / Δφ / m / FLR ({state.stationA}↔{state.stationB})
         </button>
         <button
           type="button"
           className={`tab-btn ${state.activeCrossTab === "wtc" ? "active" : ""}`}
           onClick={() => dispatch({ type: "SET_ACTIVE_CROSS_TAB", tab: "wtc" })}
         >
-          Вейвлет XWT / WTC + Монте-Карло (Tier 3)
+          Wavelet XWT / WTC + Monte Carlo (Tier 3)
         </button>
       </div>
 

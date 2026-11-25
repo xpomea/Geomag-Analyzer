@@ -1,5 +1,13 @@
 import React, { useMemo } from "react";
-import { AlertTriangle, Compass, Layers, Sliders, Sun } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronRight,
+  Compass,
+  Info,
+  Layers,
+  Sliders,
+  Sun,
+} from "lucide-react";
 import type {
   BandType,
   CoordFrame,
@@ -16,6 +24,13 @@ const QUICK_PAIRS: { label: string; a: string; b: string }[] = [
   { label: "HRN–LVV", a: "HRN", b: "LVV" },
   { label: "LVV–OTT", a: "LVV", b: "OTT" },
 ];
+
+const METHOD_SHORT_LABELS: Record<PolarizationMethod, string> = {
+  welch: "Welch",
+  multitaper: "DPSS",
+  variant_b_fft: "FFT+Hilbert",
+  variant_b_sos: "Butterworth",
+};
 
 export const ControlSidebar: React.FC = React.memo(() => {
   const {
@@ -45,8 +60,8 @@ export const ControlSidebar: React.FC = React.memo(() => {
 
   const renderStationOption = (code: string, name: string, hasBaseline: boolean) => {
     const avail = stationAvailabilityMap.get(code);
-    const availText = avail ? `${avail.days}д (${avail.qualities.join("/")})` : "нет в эп.";
-    const baseTag = hasBaseline ? "" : " [без базы]";
+    const availText = avail ? `${avail.days}d (${avail.qualities.join("/")})` : "absent";
+    const baseTag = hasBaseline ? "" : " [no baseline]";
     return (
       <option key={code} value={code}>
         {code} — {name} · {availText}
@@ -59,16 +74,18 @@ export const ControlSidebar: React.FC = React.memo(() => {
   const stationBMeta = stationMetaMap.get(state.stationB);
   const isVariantB = state.method.startsWith("variant_b");
 
+  const swipsWarning = shiftedSolar1?.solar1.warning?.trim();
+
   return (
     <aside className="sidebar">
       <section className="sidebar-section">
         <div className="sidebar-heading">
-          <span>Эпизод и станции</span>
+          <span>Episode &amp; Stations</span>
           <Compass size={13} />
         </div>
 
         <label className="field-label">
-          <span>Шторм (октябрь 2026)</span>
+          <span>Storm Episode (Oct 2026)</span>
           <select
             value={state.episodeId}
             onChange={(e) => {
@@ -78,7 +95,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
           >
             {(catalog?.episodes ?? []).map((ep) => (
               <option key={ep.episode_id} value={ep.episode_id}>
-                {ep.label} · {ep.n_days} дн. {ep.omni_available ? "[OMNI]" : "[без OMNI]"}
+                {ep.label} · {ep.n_days}d {ep.omni_available ? "[OMNI]" : "[no OMNI]"}
               </option>
             ))}
           </select>
@@ -86,35 +103,35 @@ export const ControlSidebar: React.FC = React.memo(() => {
 
         {activeEpisode && !activeEpisode.omni_available && (
           <div className="hint-text" style={{ color: "var(--warn)" }}>
-            Для этого эпизода ряды OMNI_1min отсутствуют (доступны только Oct 4–5 и Oct 9–11).
+            OMNI_1min unavailable for this episode (Oct 4–5 and Oct 9–11 only).
           </div>
         )}
 
         <label className="field-label">
-          <span>Станция A (основная)</span>
+          <span>Station A (Primary)</span>
           <select
             value={state.stationA}
             onChange={(e) => dispatch({ type: "SET_STATION_A", stationIaga: e.target.value })}
           >
-            <optgroup label="Европа">
+            <optgroup label="Europe">
               {europeMags.map((s) => renderStationOption(s.iaga_code, s.station_name, s.has_baseline))}
             </optgroup>
-            <optgroup label="Канада">
+            <optgroup label="Canada">
               {canadaMags.map((s) => renderStationOption(s.iaga_code, s.station_name, s.has_baseline))}
             </optgroup>
           </select>
         </label>
 
         <label className="field-label">
-          <span>Станция B (кросс-анализ)</span>
+          <span>Station B (Cross-Spectral)</span>
           <select
             value={state.stationB}
             onChange={(e) => dispatch({ type: "SET_STATION_B", stationIaga: e.target.value })}
           >
-            <optgroup label="Европа">
+            <optgroup label="Europe">
               {europeMags.map((s) => renderStationOption(s.iaga_code, s.station_name, s.has_baseline))}
             </optgroup>
-            <optgroup label="Канада">
+            <optgroup label="Canada">
               {canadaMags.map((s) => renderStationOption(s.iaga_code, s.station_name, s.has_baseline))}
             </optgroup>
           </select>
@@ -137,7 +154,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
           <div className="hint-text" style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
             <AlertTriangle size={13} color="var(--warn)" style={{ flexShrink: 0, marginTop: 2 }} />
             <span>
-              Обсерватория без абсолютной базы (`variation`): авто-поворот D0 заблокирован.
+              Variation-only observatory (no absolute baseline): auto D0 rotation disabled.
             </span>
           </div>
         ) : null}
@@ -145,7 +162,15 @@ export const ControlSidebar: React.FC = React.memo(() => {
 
       <section className="sidebar-section">
         <div className="sidebar-heading">
-          <span>Полоса, метод и СК</span>
+          <span className="sidebar-heading-left">
+            <span>Band &amp; Coordinates</span>
+            <span
+              className="info-tip-badge"
+              title="19-point INTERMAGNET Gaussian filter: at the Pc5 lower period bound (150 s), amplitude response |H| = 0.805."
+            >
+              <Info size={12} />
+            </span>
+          </span>
           <Layers size={13} />
         </div>
 
@@ -157,99 +182,65 @@ export const ControlSidebar: React.FC = React.memo(() => {
               className={state.band === b ? "active" : ""}
               onClick={() => dispatch({ type: "SET_BAND", band: b })}
             >
-              {b === "Pc5" ? "Pc5 (150–600 с)" : `Pc6 (600–${state.tMaxPc6Sec} с)`}
+              {b === "Pc5" ? "Pc5 (150–600 s)" : `Pc6 (600–${state.tMaxPc6Sec} s)`}
             </button>
           ))}
         </div>
 
-        {state.band === "Pc5" ? (
-          <div className="hint-text">
-            19-точ. фильтр Гаусса INTERMAGNET: на нижней границе Pc5 (150 с) ослабление |H| = 0.805.
-          </div>
-        ) : (
+        {state.band === "Pc6" && (
           <label className="field-label">
-            <span>T_max для Pc6 [сек]</span>
+            <span>T_max for Pc6 [s]</span>
             <select
               value={state.tMaxPc6Sec}
               onChange={(e) => dispatch({ type: "SET_T_MAX_PC6", sec: Number(e.target.value) })}
             >
-              <option value={900}>900 с (15 мин)</option>
-              <option value={1800}>1800 с (30 мин, базовый)</option>
-              <option value={2400}>2400 с (40 мин)</option>
-              <option value={3600}>3600 с (60 мин)</option>
+              <option value={900}>900 s (15 min)</option>
+              <option value={1800}>1800 s (30 min, default)</option>
+              <option value={2400}>2400 s (40 min)</option>
+              <option value={3600}>3600 s (60 min)</option>
             </select>
           </label>
         )}
 
-        <label className="field-label">
-          <span>Метод оценивания</span>
-          <select
-            value={state.method}
-            onChange={(e) =>
-              dispatch({ type: "SET_METHOD", method: e.target.value as PolarizationMethod })
-            }
-          >
-            <option value="welch">Вариант A · Welch (Hann)</option>
-            <option value="multitaper">Вариант A · Multitaper (DPSS)</option>
-            <option value="variant_b_fft">Вариант B · FFT-маска + Гильберт</option>
-            <option value="variant_b_sos">Вариант B · Butterworth SOS + Гильберт</option>
-          </select>
-        </label>
-
-        <div className="field-row">
-          <div className="field-label">
-            <span>Система координат</span>
-            <div className="segmented">
-              {(["XYZ", "XmYm"] as CoordFrame[]).map((cf) => (
-                <button
-                  key={cf}
-                  type="button"
-                  className={state.coordFrame === cf ? "active" : ""}
-                  onClick={() => dispatch({ type: "SET_COORD_FRAME", coordFrame: cf })}
-                >
-                  {cf}
-                </button>
-              ))}
-            </div>
+        <div className="field-label">
+          <span>Coordinate Frame</span>
+          <div className="segmented">
+            {(["XYZ", "XmYm"] as CoordFrame[]).map((cf) => (
+              <button
+                key={cf}
+                type="button"
+                className={state.coordFrame === cf ? "active" : ""}
+                onClick={() => dispatch({ type: "SET_COORD_FRAME", coordFrame: cf })}
+              >
+                {cf}
+              </button>
+            ))}
           </div>
-
-          <label className="field-label">
-            <span>Спектр фона</span>
-            <select
-              value={state.spectrumType}
-              onChange={(e) =>
-                dispatch({ type: "SET_SPECTRUM_TYPE", spectrumType: e.target.value as SpectrumType })
-              }
-            >
-              <option value="flat">Плоский (flat)</option>
-              <option value="red">Красный (f⁻²)</option>
-            </select>
-          </label>
         </div>
 
         {state.coordFrame === "XmYm" && (
           <div className="field-row">
             <label className="field-label">
-              <span>D0 ст. A [°]</span>
+              <span>D0 St. A [°]</span>
               <DraftNullableNumberInput
                 min={-180}
                 max={180}
                 step={0.1}
-                placeholder="Авто"
+                placeholder="Auto"
                 value={state.externalD0Deg}
-                ariaLabel="D0 станции A"
+                ariaLabel="D0 Station A"
                 onCommit={(val) => dispatch({ type: "SET_EXTERNAL_D0", d0Deg: val })}
               />
             </label>
             <label className="field-label">
-              <span>D0 ст. B [°]</span>
+              <span>D0 St. B [°]</span>
               <DraftNullableNumberInput
                 min={-180}
                 max={180}
                 step={0.1}
-                placeholder="Авто"
+                placeholder="Auto"
                 value={state.externalD0DegB}
-                ariaLabel="D0 станции B"
+                ariaLabel="D0 Station B"
                 onCommit={(val) => dispatch({ type: "SET_EXTERNAL_D0_B", d0Deg: val })}
               />
             </label>
@@ -259,70 +250,6 @@ export const ControlSidebar: React.FC = React.memo(() => {
         {baselineWarning && (
           <div className="hint-text" style={{ color: "var(--danger)" }}>
             {baselineWarning}
-          </div>
-        )}
-
-        <div className="field-row">
-          <label className="field-label">
-            <span>Окно стат. [мин]</span>
-            <DraftNumberInput
-              min={Math.max(60, state.L)}
-              max={1440}
-              step={30}
-              integer
-              value={state.windowSamples}
-              onCommit={(val) =>
-                dispatch({
-                  type: "SET_WELCH_PARAMS",
-                  windowSamples: val,
-                })
-              }
-            />
-          </label>
-          <label className="field-label">
-            <span>Шаг [мин]</span>
-            <DraftNumberInput
-              min={10}
-              max={240}
-              step={10}
-              integer
-              value={state.stepSamples}
-              onCommit={(val) =>
-                dispatch({
-                  type: "SET_WELCH_PARAMS",
-                  stepSamples: val,
-                })
-              }
-            />
-          </label>
-        </div>
-
-        {state.method === "welch" && (
-          <div className="field-row">
-            <label className="field-label">
-              <span>Сегмент L</span>
-              <select
-                value={state.L}
-                onChange={(e) =>
-                  dispatch({ type: "SET_WELCH_PARAMS", L: Number(e.target.value) })
-                }
-              >
-                <option value={128}>128</option>
-                <option value={256}>256</option>
-              </select>
-            </label>
-            <label className="field-label">
-              <span>Сдвиг M</span>
-              <select
-                value={state.M}
-                onChange={(e) =>
-                  dispatch({ type: "SET_WELCH_PARAMS", M: Number(e.target.value) })
-                }
-              >
-                <option value={64}>64</option>
-                {state.L > 128 && <option value={128}>128</option>}
-              </select>
-            </label>
           </div>
         )}
 
@@ -338,8 +265,8 @@ export const ControlSidebar: React.FC = React.memo(() => {
             }}
           >
             <span>
-              L·Δt ({state.L * 60} с) &lt; 4·T_max ({4 * state.tMaxPc6Sec} с) (§5.2)
-              {state.method !== "welch" ? " (для Уэлча / спектрогр.)" : ""}
+              L·Δt ({state.L * 60} s) &lt; 4·T_max ({4 * state.tMaxPc6Sec} s)
+              {state.method !== "welch" ? " (Welch / spec.)" : ""}
             </span>
             <button
               type="button"
@@ -351,106 +278,40 @@ export const ControlSidebar: React.FC = React.memo(() => {
           </div>
         )}
 
-        {state.method === "multitaper" && (
-          <label className="field-label">
-            <span>Параметр полосы NW</span>
-            <DraftNumberInput
-              min={1.5}
-              max={6.0}
-              step={0.5}
-              value={state.nw}
-              onCommit={(val) => dispatch({ type: "SET_NW", nw: val })}
-            />
-          </label>
-        )}
-
-        {isVariantB && (
-          <>
-            <div className="field-row">
-              <label className="field-label">
-                <span>Оверсэмпл m</span>
-                <select
-                  value={state.oversampleM}
-                  onChange={(e) =>
-                    dispatch({
-                      type: "SET_VARIANT_B_PARAMS",
-                      oversampleM: Number(e.target.value),
-                    })
-                  }
-                >
-                  <option value={1}>m = 1</option>
-                  <option value={4}>m = 4 (рек.)</option>
-                  <option value={8}>m = 8</option>
-                </select>
-              </label>
-              <label className="field-label">
-                <span>Метод m</span>
-                <select
-                  value={state.oversampleMethod}
-                  onChange={(e) =>
-                    dispatch({
-                      type: "SET_VARIANT_B_PARAMS",
-                      oversampleMethod: e.target.value as OversampleMethod,
-                    })
-                  }
-                >
-                  <option value="fourier">Fourier</option>
-                  <option value="kaiser">Kaiser FIR</option>
-                </select>
-              </label>
-            </div>
-
-            {state.method === "variant_b_sos" && (
-              <label className="field-label">
-                <span>Порядок Баттерворта n</span>
-                <select
-                  value={state.orderN}
-                  onChange={(e) =>
-                    dispatch({
-                      type: "SET_VARIANT_B_PARAMS",
-                      orderN: Number(e.target.value),
-                    })
-                  }
-                >
-                  <option value={2}>n = 2</option>
-                  <option value={3}>n = 3 (рек., Табл. 11)</option>
-                  <option value={4}>n = 4</option>
-                </select>
-              </label>
-            )}
-
-            {state.method === "variant_b_sos" &&
-              state.band === "Pc5" &&
-              state.oversampleM < 4 && (
-                <div
-                  className="hint-text"
-                  style={{
-                    color: "var(--warn)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 6,
-                  }}
-                >
-                  <span>Для Pc5 SOS по Табл. 9 требуется m ≥ 4</span>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() =>
-                      dispatch({ type: "SET_VARIANT_B_PARAMS", oversampleM: 4 })
-                    }
-                  >
-                    m = 4
-                  </button>
-                </div>
-              )}
-          </>
+        {state.method === "variant_b_sos" && state.band === "Pc5" && state.oversampleM < 4 && (
+          <div
+            className="hint-text"
+            style={{
+              color: "var(--warn)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+            }}
+          >
+            <span>Pc5 Butterworth SOS requires m ≥ 4</span>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => dispatch({ type: "SET_VARIANT_B_PARAMS", oversampleM: 4 })}
+            >
+              m = 4
+            </button>
+          </div>
         )}
       </section>
 
       <section className="sidebar-section">
         <div className="sidebar-heading">
-          <span>Порог α (мгновенно)</span>
+          <span className="sidebar-heading-left">
+            <span>Significance α</span>
+            <span
+              className="info-tip-badge"
+              title="p_crit, γ²_crit, and noise interval masking recalculate instantaneously on the client with zero server roundtrips."
+            >
+              <Info size={12} />
+            </span>
+          </span>
           <Sliders size={13} />
         </div>
         <div className="quick-chips">
@@ -461,27 +322,30 @@ export const ControlSidebar: React.FC = React.memo(() => {
               className={`chip-btn ${Math.abs(state.alpha - a) < 1e-6 ? "active" : ""}`}
               onClick={() => dispatch({ type: "SET_ALPHA", alpha: a })}
             >
-              α = {a} ({Math.round((1 - a) * 100)}%)
+              α = {a === 0.1 ? "0.10" : a} ({Math.round((1 - a) * 100)}%)
             </button>
           ))}
-        </div>
-        <div className="hint-text">
-          Пересчёт <span className="mono">p_crit</span>, <span className="mono">γ²_crit</span> и
-          маскирование шумовых интервалов выполняются локально без перезапроса сервера.
         </div>
       </section>
 
       <section className="sidebar-section">
         <div className="sidebar-heading">
-          <span>Сдвиг SOLAR-1 (L1 → BSN)</span>
+          <span className="sidebar-heading-left">
+            <span>SOLAR-1 Shift (L1 → BSN)</span>
+            {swipsWarning && (
+              <span className="info-tip-badge" title={swipsWarning}>
+                <Info size={12} />
+              </span>
+            )}
+          </span>
           <Sun size={13} />
         </div>
         <div className="segmented">
           {(
             [
-              { id: "ballistic_auto", label: "Авто Vx" },
-              { id: "l1_raw", label: "L1 raw" },
-              { id: "manual", label: "Ручной" },
+              { id: "ballistic_auto", label: "Auto Vx" },
+              { id: "l1_raw", label: "L1 Raw" },
+              { id: "manual", label: "Manual" },
             ] as { id: Solar1ShiftMode; label: string }[]
           ).map((item) => (
             <button
@@ -497,7 +361,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
 
         {state.solar1ShiftMode === "manual" && (
           <label className="field-label">
-            <span>Лаг [мин]: {state.manualLagMin}</span>
+            <span>Lag [min]: {state.manualLagMin}</span>
             <input
               type="range"
               min={0}
@@ -514,11 +378,187 @@ export const ControlSidebar: React.FC = React.memo(() => {
         {shiftedSolar1 && (
           <div className="hint-text mono">
             {state.solar1ShiftMode === "l1_raw"
-              ? "Без сдвига (время L1)"
-              : `Задержка: ${shiftedSolar1.meanDelayMin.toFixed(1)} мин [${shiftedSolar1.minDelayMin.toFixed(0)}..${shiftedSolar1.maxDelayMin.toFixed(0)}]`}
+              ? "No shift (L1 time)"
+              : `Delay: ${shiftedSolar1.meanDelayMin.toFixed(1)} min [${shiftedSolar1.minDelayMin.toFixed(0)}..${shiftedSolar1.maxDelayMin.toFixed(0)}]`}
           </div>
         )}
       </section>
+
+      <details className="sidebar-section sidebar-details">
+        <summary className="sidebar-heading">
+          <span className="sidebar-heading-left">
+            <ChevronRight size={13} className="sidebar-details-chevron" />
+            <span>Method &amp; Spectral</span>
+          </span>
+          <span className="mono" style={{ fontSize: 10, color: "var(--accent-primary)" }}>
+            {METHOD_SHORT_LABELS[state.method]} · {state.windowSamples}/{state.stepSamples}m
+          </span>
+        </summary>
+
+        <div className="sidebar-details-body">
+          <label className="field-label">
+            <span>Estimator</span>
+            <select
+              value={state.method}
+              onChange={(e) =>
+                dispatch({ type: "SET_METHOD", method: e.target.value as PolarizationMethod })
+              }
+            >
+              <option value="welch">Variant A · Welch (Hann)</option>
+              <option value="multitaper">Variant A · Multitaper (DPSS)</option>
+              <option value="variant_b_fft">Variant B · FFT Mask + Hilbert</option>
+              <option value="variant_b_sos">Variant B · Butterworth SOS + Hilbert</option>
+            </select>
+          </label>
+
+          <label className="field-label">
+            <span>Background Spectrum</span>
+            <select
+              value={state.spectrumType}
+              onChange={(e) =>
+                dispatch({ type: "SET_SPECTRUM_TYPE", spectrumType: e.target.value as SpectrumType })
+              }
+            >
+              <option value="flat">Flat (white)</option>
+              <option value="red">Red (f⁻²)</option>
+            </select>
+          </label>
+
+          <div className="field-row">
+            <label className="field-label">
+              <span>Window [min]</span>
+              <DraftNumberInput
+                min={Math.max(60, state.L)}
+                max={1440}
+                step={30}
+                integer
+                value={state.windowSamples}
+                onCommit={(val) =>
+                  dispatch({
+                    type: "SET_WELCH_PARAMS",
+                    windowSamples: val,
+                  })
+                }
+              />
+            </label>
+            <label className="field-label">
+              <span>Step [min]</span>
+              <DraftNumberInput
+                min={10}
+                max={240}
+                step={10}
+                integer
+                value={state.stepSamples}
+                onCommit={(val) =>
+                  dispatch({
+                    type: "SET_WELCH_PARAMS",
+                    stepSamples: val,
+                  })
+                }
+              />
+            </label>
+          </div>
+
+          {state.method === "welch" && (
+            <div className="field-row">
+              <label className="field-label">
+                <span>Segment L</span>
+                <select
+                  value={state.L}
+                  onChange={(e) =>
+                    dispatch({ type: "SET_WELCH_PARAMS", L: Number(e.target.value) })
+                  }
+                >
+                  <option value={128}>128</option>
+                  <option value={256}>256</option>
+                </select>
+              </label>
+              <label className="field-label">
+                <span>Overlap Shift M</span>
+                <select
+                  value={state.M}
+                  onChange={(e) =>
+                    dispatch({ type: "SET_WELCH_PARAMS", M: Number(e.target.value) })
+                  }
+                >
+                  <option value={64}>64</option>
+                  {state.L > 128 && <option value={128}>128</option>}
+                </select>
+              </label>
+            </div>
+          )}
+
+          {state.method === "multitaper" && (
+            <label className="field-label">
+              <span>Time-Bandwidth NW</span>
+              <DraftNumberInput
+                min={1.5}
+                max={6.0}
+                step={0.5}
+                value={state.nw}
+                onCommit={(val) => dispatch({ type: "SET_NW", nw: val })}
+              />
+            </label>
+          )}
+
+          {isVariantB && (
+            <>
+              <div className="field-row">
+                <label className="field-label">
+                  <span>Oversample m</span>
+                  <select
+                    value={state.oversampleM}
+                    onChange={(e) =>
+                      dispatch({
+                        type: "SET_VARIANT_B_PARAMS",
+                        oversampleM: Number(e.target.value),
+                      })
+                    }
+                  >
+                    <option value={1}>m = 1</option>
+                    <option value={4}>m = 4 (rec.)</option>
+                    <option value={8}>m = 8</option>
+                  </select>
+                </label>
+                <label className="field-label">
+                  <span>OS Method</span>
+                  <select
+                    value={state.oversampleMethod}
+                    onChange={(e) =>
+                      dispatch({
+                        type: "SET_VARIANT_B_PARAMS",
+                        oversampleMethod: e.target.value as OversampleMethod,
+                      })
+                    }
+                  >
+                    <option value="fourier">Fourier</option>
+                    <option value="kaiser">Kaiser FIR</option>
+                  </select>
+                </label>
+              </div>
+
+              {state.method === "variant_b_sos" && (
+                <label className="field-label">
+                  <span>Butterworth Order n</span>
+                  <select
+                    value={state.orderN}
+                    onChange={(e) =>
+                      dispatch({
+                        type: "SET_VARIANT_B_PARAMS",
+                        orderN: Number(e.target.value),
+                      })
+                    }
+                  >
+                    <option value={2}>n = 2</option>
+                    <option value={3}>n = 3 (rec.)</option>
+                    <option value={4}>n = 4</option>
+                  </select>
+                </label>
+              )}
+            </>
+          )}
+        </div>
+      </details>
     </aside>
   );
 });

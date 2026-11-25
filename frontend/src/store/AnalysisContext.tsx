@@ -189,7 +189,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           checked: true,
           authenticated: false,
           requireAuth: true,
-          error: err instanceof Error ? err.message : "Ошибка инициализации сессии",
+          error: err instanceof Error ? err.message : "Session initialization failed",
         });
       }
     })();
@@ -212,7 +212,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setAuth((prev) => ({
         ...prev,
         authenticated: false,
-        error: err instanceof ApiError ? err.detail : "Неверный или просроченный токен",
+        error: err instanceof ApiError ? err.detail : "Invalid or expired bootstrap token",
       }));
     }
   }, []);
@@ -243,7 +243,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
       .catch((err) => {
         if ((err as Error).name !== "AbortError") {
-          setGlobalError(err instanceof Error ? err.message : "Ошибка загрузки каталога");
+          setGlobalError(err instanceof Error ? err.message : "Failed to load station catalog");
         }
       })
       .finally(() => {
@@ -333,7 +333,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
       .catch((err) => {
         if ((err as Error).name !== "AbortError") {
-          setGlobalError(err instanceof Error ? err.message : "Ошибка загрузки космической погоды");
+          setGlobalError(err instanceof Error ? err.message : "Failed to load space weather time series");
         }
       })
       .finally(() => {
