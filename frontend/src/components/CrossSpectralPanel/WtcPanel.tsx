@@ -45,7 +45,6 @@ export const WtcPanel: React.FC = () => {
     [state.jobs, state.activeWtcJobId],
   );
   const isJobActive = activeJob !== null && !TERMINAL_JOB_STATUSES.has(activeJob.status);
-  const transport = activeJob ? state.jobTransport[activeJob.job_id] : undefined;
 
   const handleLaunch = () => {
     void launchWtcJob({
@@ -168,9 +167,7 @@ export const WtcPanel: React.FC = () => {
                 }`}
               >
                 {formatJobStatus(activeJob.status)} · {activeJob.progress_pct.toFixed(0)}%
-                {activeJob.cache_hit ? " (cache hit)" : ""}
               </span>
-              {transport && <span className="pill mono">{transport.toUpperCase()}</span>}
               {activeJob.eta_sec !== null && isJobActive && (
                 <span className="pill mono">ETA: {formatEta(activeJob.eta_sec)}</span>
               )}
@@ -311,7 +308,7 @@ export const WtcPanel: React.FC = () => {
         )}
 
         {wtcError && <div className="banner banner-danger">{wtcError}</div>}
-        {loadingWtcResult && <div className="empty-note">Loading XWT/WTC matrices from NPZ cache…</div>}
+        {loadingWtcResult && <div className="empty-note">Loading wavelet results…</div>}
 
         {wtcResult && (
           <>
@@ -410,9 +407,8 @@ export const WtcPanel: React.FC = () => {
 
         {!wtcResult && !isJobActive && !loadingWtcResult && (
           <div className="empty-note" style={{ margin: "auto" }}>
-            Click &ldquo;Run XWT / WTC&rdquo; to launch asynchronous wavelet coherence and Monte
-            Carlo significance testing (or fetch instantly from <span className="mono">NPZ</span>{" "}
-            cache).
+            Click &ldquo;Run XWT / WTC&rdquo; to compute cross-wavelet power and wavelet coherence
+            with Monte Carlo significance.
           </div>
         )}
       </div>

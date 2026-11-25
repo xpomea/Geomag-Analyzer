@@ -74,8 +74,6 @@ export const ControlSidebar: React.FC = React.memo(() => {
   const stationBMeta = stationMetaMap.get(state.stationB);
   const isVariantB = state.method.startsWith("variant_b");
 
-  const swipsWarning = shiftedSolar1?.solar1.warning?.trim();
-
   return (
     <aside className="sidebar">
       <section className="sidebar-section">
@@ -85,7 +83,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
         </div>
 
         <label className="field-label">
-          <span>Storm Episode (Oct 2026)</span>
+          <span>Episode</span>
           <select
             value={state.episodeId}
             onChange={(e) => {
@@ -103,7 +101,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
 
         {activeEpisode && !activeEpisode.omni_available && (
           <div className="hint-text" style={{ color: "var(--warn)" }}>
-            OMNI_1min unavailable for this episode (Oct 4–5 and Oct 9–11 only).
+            OMNI data unavailable for this episode.
           </div>
         )}
 
@@ -154,7 +152,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
           <div className="hint-text" style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
             <AlertTriangle size={13} color="var(--warn)" style={{ flexShrink: 0, marginTop: 2 }} />
             <span>
-              Variation-only observatory (no absolute baseline): auto D0 rotation disabled.
+              No absolute baseline: enter D0 manually for XmYm.
             </span>
           </div>
         ) : null}
@@ -166,7 +164,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
             <span>Band &amp; Coordinates</span>
             <span
               className="info-tip-badge"
-              title="19-point INTERMAGNET Gaussian filter: at the Pc5 lower period bound (150 s), amplitude response |H| = 0.805."
+              title="INTERMAGNET 1-min Gaussian filter: |H| = 0.805 at T = 150 s."
             >
               <Info size={12} />
             </span>
@@ -195,7 +193,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
               onChange={(e) => dispatch({ type: "SET_T_MAX_PC6", sec: Number(e.target.value) })}
             >
               <option value={900}>900 s (15 min)</option>
-              <option value={1800}>1800 s (30 min, default)</option>
+              <option value={1800}>1800 s (30 min)</option>
               <option value={2400}>2400 s (40 min)</option>
               <option value={3600}>3600 s (60 min)</option>
             </select>
@@ -304,10 +302,12 @@ export const ControlSidebar: React.FC = React.memo(() => {
       <section className="sidebar-section">
         <div className="sidebar-heading">
           <span className="sidebar-heading-left">
-            <span>Significance α</span>
+            <span>
+              Significance <span className="keep-case">α</span>
+            </span>
             <span
               className="info-tip-badge"
-              title="p_crit, γ²_crit, and noise interval masking recalculate instantaneously on the client with zero server roundtrips."
+              title="Statistical significance level for p_crit, γ²_crit, and Monte Carlo contours. Masks non-significant map ellipses, coherence arcs, Stokes angles (ψ, χ, ε), and cross-spectral phases (Δφ, m)."
             >
               <Info size={12} />
             </span>
@@ -332,11 +332,6 @@ export const ControlSidebar: React.FC = React.memo(() => {
         <div className="sidebar-heading">
           <span className="sidebar-heading-left">
             <span>SOLAR-1 Shift (L1 → BSN)</span>
-            {swipsWarning && (
-              <span className="info-tip-badge" title={swipsWarning}>
-                <Info size={12} />
-              </span>
-            )}
           </span>
           <Sun size={13} />
         </div>
@@ -386,11 +381,14 @@ export const ControlSidebar: React.FC = React.memo(() => {
 
       <details className="sidebar-section sidebar-details">
         <summary className="sidebar-heading">
-          <span className="sidebar-heading-left">
+          <span className="sidebar-heading-left" style={{ whiteSpace: "nowrap" }}>
             <ChevronRight size={13} className="sidebar-details-chevron" />
             <span>Method &amp; Spectral</span>
           </span>
-          <span className="mono" style={{ fontSize: 10, color: "var(--accent-primary)" }}>
+          <span
+            className="mono keep-case"
+            style={{ fontSize: 10, color: "var(--accent-primary)", whiteSpace: "nowrap" }}
+          >
             {METHOD_SHORT_LABELS[state.method]} · {state.windowSamples}/{state.stepSamples}m
           </span>
         </summary>
@@ -404,10 +402,10 @@ export const ControlSidebar: React.FC = React.memo(() => {
                 dispatch({ type: "SET_METHOD", method: e.target.value as PolarizationMethod })
               }
             >
-              <option value="welch">Variant A · Welch (Hann)</option>
-              <option value="multitaper">Variant A · Multitaper (DPSS)</option>
-              <option value="variant_b_fft">Variant B · FFT Mask + Hilbert</option>
-              <option value="variant_b_sos">Variant B · Butterworth SOS + Hilbert</option>
+              <option value="welch">Welch (Hann)</option>
+              <option value="multitaper">Multitaper (DPSS)</option>
+              <option value="variant_b_fft">FFT Bandpass + Hilbert</option>
+              <option value="variant_b_sos">Butterworth SOS + Hilbert</option>
             </select>
           </label>
 
@@ -516,7 +514,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
                     }
                   >
                     <option value={1}>m = 1</option>
-                    <option value={4}>m = 4 (rec.)</option>
+                    <option value={4}>m = 4</option>
                     <option value={8}>m = 8</option>
                   </select>
                 </label>
@@ -550,7 +548,7 @@ export const ControlSidebar: React.FC = React.memo(() => {
                     }
                   >
                     <option value={2}>n = 2</option>
-                    <option value={3}>n = 3 (rec.)</option>
+                    <option value={3}>n = 3</option>
                     <option value={4}>n = 4</option>
                   </select>
                 </label>

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as echarts from "echarts";
-import { ArrowLeftRight, Database, GitBranch, RadioReceiver } from "lucide-react";
+import { ArrowLeftRight, GitBranch, RadioReceiver } from "lucide-react";
 import type { CrossComponent } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
@@ -461,16 +461,6 @@ export const WelchCrossPanel: React.FC = () => {
               </button>
             ))}
           </div>
-
-          {welchPairRaw?.cache_hits &&
-            Object.entries(welchPairRaw.cache_hits).map(([code, hit]) => (
-              <span key={code} className={`pill mono ${hit ? "pill-ok" : ""}`}>
-                <Database size={11} />
-                <span>
-                  {code}: {hit ? "cache hit" : "computed"}
-                </span>
-              </span>
-            ))}
         </div>
 
         <div className="panel-controls">

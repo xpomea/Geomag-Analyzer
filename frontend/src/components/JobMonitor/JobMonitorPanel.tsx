@@ -27,14 +27,14 @@ export const JobMonitorPanel: React.FC = () => {
       <div className="drawer-panel">
         <div className="drawer-header">
           <div style={{ fontWeight: 600, fontSize: 14 }}>
-            Tier 3 Job Monitor &amp; Disk Cache
+            Wavelet Jobs &amp; Cache
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button
               type="button"
               className="btn btn-sm"
               onClick={() => void refreshJobsAndCache()}
-              title="Refresh jobs and cache index"
+              title="Refresh jobs and cache"
             >
               <RefreshCw size={13} />
             </button>
@@ -61,7 +61,6 @@ export const JobMonitorPanel: React.FC = () => {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {state.jobs.map((job) => {
                   const isActive = !TERMINAL_JOB_STATUSES.has(job.status);
-                  const transport = state.jobTransport[job.job_id];
                   const pair = `${String(job.params.station_i ?? "?")}↔${String(job.params.station_j ?? "?")}`;
                   return (
                     <div key={job.job_id} className="job-card">
@@ -87,7 +86,6 @@ export const JobMonitorPanel: React.FC = () => {
                           }`}
                         >
                           {formatJobStatus(job.status)}
-                          {job.cache_hit ? " (hit)" : ""}
                         </span>
                       </div>
 
@@ -109,7 +107,6 @@ export const JobMonitorPanel: React.FC = () => {
                         <span>{job.stage}</span>
                         <span className="mono">
                           {job.progress_pct.toFixed(0)}% · ETA: {formatEta(job.eta_sec)}
-                          {transport ? ` · ${transport.toUpperCase()}` : ""}
                         </span>
                       </div>
 
@@ -155,12 +152,12 @@ export const JobMonitorPanel: React.FC = () => {
             <div className="sidebar-heading" style={{ marginBottom: 8 }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                 <Database size={12} />
-                Cache Index runtime.sqlite ({state.cacheEntries.length})
+                Cached Results ({state.cacheEntries.length})
               </span>
             </div>
 
             {state.cacheEntries.length === 0 ? (
-              <div className="hint-text">No entries in cache index yet.</div>
+              <div className="hint-text">No cached results yet.</div>
             ) : (
               <div style={{ overflowX: "auto" }}>
                 <table className="data-table">
@@ -169,7 +166,6 @@ export const JobMonitorPanel: React.FC = () => {
                       <th>Type</th>
                       <th>Station / Pair</th>
                       <th>Size</th>
-                      <th>SHA-256 Key</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -182,7 +178,6 @@ export const JobMonitorPanel: React.FC = () => {
                           <td className="mono">{entry.category}</td>
                           <td className="mono">{label}</td>
                           <td className="mono">{formatBytes(entry.size_bytes)}</td>
-                          <td className="mono">{entry.cache_key.slice(0, 10)}…</td>
                         </tr>
                       );
                     })}

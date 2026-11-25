@@ -13,7 +13,7 @@ export const CrossSpectralContainer: React.FC = () => {
       <div className="panel-header">
         <div className="panel-title-group">
           <RadioReceiver size={15} color="#2dd4bf" />
-          <span>Dynamic Spectrogram &amp; Cross-Spectral Analysis (Tier 2 / Tier 3)</span>
+          <span>Dynamic Spectrogram &amp; Cross-Spectral Analysis</span>
         </div>
       </div>
 
@@ -37,7 +37,7 @@ export const CrossSpectralContainer: React.FC = () => {
           className={`tab-btn ${state.activeCrossTab === "wtc" ? "active" : ""}`}
           onClick={() => dispatch({ type: "SET_ACTIVE_CROSS_TAB", tab: "wtc" })}
         >
-          Wavelet XWT / WTC + Monte Carlo (Tier 3)
+          Wavelet XWT / WTC + Monte Carlo
         </button>
       </div>
 

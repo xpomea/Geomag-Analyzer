@@ -647,8 +647,13 @@ input[type="range"] {
 .kpi-label {
   font-size: 10px;
   color: var(--text-muted);
-  text-transform: uppercase;
+  font-weight: 500;
   line-height: 1.2;
+}
+
+.keep-case {
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .kpi-val {

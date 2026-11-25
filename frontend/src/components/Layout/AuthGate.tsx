@@ -11,8 +11,8 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     return (
       <div className="modal-backdrop">
         <div className="modal-card">
-          <div style={{ fontWeight: 600 }}>Initializing GeoMag Analyzer session…</div>
-          <div className="hint-text">Verifying local authentication token and backend health.</div>
+          <div style={{ fontWeight: 600 }}>Starting GeoMag Analyzer…</div>
+          <div className="hint-text">Loading workspace…</div>
         </div>
       </div>
     );
@@ -38,11 +38,10 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       <form className="modal-card" onSubmit={handleSubmit}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15 }}>
           <KeyRound size={18} color="var(--accent-primary)" />
-          <span>Local Authentication Required</span>
+          <span>Session Authentication</span>
         </div>
         <div className="hint-text">
-          Open the launcher URL <span className="mono">http://127.0.0.1:PORT/?token=…</span> or enter
-          the one-time bootstrap token below.
+          Enter the access token provided on launch.
         </div>
         {auth.error && (
           <div className="banner banner-danger">
@@ -51,12 +50,12 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </div>
         )}
         <label className="field-label">
-          <span>Bootstrap Token</span>
+          <span>Access Token</span>
           <input
             type="password"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="Paste bootstrap token…"
+            placeholder="Paste access token…"
             autoFocus
           />
         </label>

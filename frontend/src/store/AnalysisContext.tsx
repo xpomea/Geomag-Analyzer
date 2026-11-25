@@ -212,7 +212,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setAuth((prev) => ({
         ...prev,
         authenticated: false,
-        error: err instanceof ApiError ? err.detail : "Invalid or expired bootstrap token",
+        error: err instanceof ApiError ? err.detail : "Invalid or expired access token",
       }));
     }
   }, []);

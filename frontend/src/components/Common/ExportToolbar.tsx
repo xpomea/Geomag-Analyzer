@@ -81,7 +81,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
           className="btn btn-sm"
           disabled={disabled || busy !== null}
           onClick={handleSvg}
-          title="Export vector SVG (for thesis / Word / Inkscape)"
+          title="Export vector SVG"
         >
           <Download size={12} />
           <span>SVG</span>
@@ -94,7 +94,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
           className="btn btn-sm"
           disabled={disabled || busy !== null}
           onClick={() => void handlePng()}
-          title="Export raster PNG at 300 DPI"
+          title="Export PNG (300 DPI)"
         >
           <ImageIcon size={12} />
           <span>{busy === "png" ? "…" : "PNG 300"}</span>
@@ -107,7 +107,7 @@ export const ExportToolbar: React.FC<ExportToolbarProps> = ({
           className="btn btn-sm"
           disabled={disabled || busy !== null}
           onClick={handleCsv}
-          title="Export numerical data and metadata as CSV"
+          title="Export CSV"
         >
           <FileSpreadsheet size={12} />
           <span>CSV</span>

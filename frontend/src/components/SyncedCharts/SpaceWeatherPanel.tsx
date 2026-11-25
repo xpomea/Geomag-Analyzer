@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo } from "react";
 import type * as echarts from "echarts";
-import { AlertCircle, Info, Sun } from "lucide-react";
+import { AlertCircle, Sun } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
 import {
@@ -365,14 +365,6 @@ export const SpaceWeatherPanel: React.FC = () => {
           {shiftedSolar1 && (
             <span className="pill pill-accent mono">
               {formatSolar1TimeFrame(state.solar1ShiftMode, shiftedSolar1.meanDelayMin)}
-            </span>
-          )}
-          {shiftedSolar1?.solar1.warning && (
-            <span
-              className="info-tip-badge"
-              title={`SOLAR-1 SWiPS QC note: ${shiftedSolar1.solar1.warning}`}
-            >
-              <Info size={13} />
             </span>
           )}
         </div>

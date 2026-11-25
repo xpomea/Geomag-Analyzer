@@ -76,11 +76,10 @@ const Workbench: React.FC = () => {
         <div className="modal-card">
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15 }}>
             <CheckCircle2 size={18} color="var(--ok)" />
-            <span>GeoMag Analyzer Server Stopped</span>
+            <span>GeoMag Analyzer Closed</span>
           </div>
           <div className="hint-text">
-            <span className="mono">ProcessPoolExecutor</span> workers and FastAPI exited gracefully.
-            You may now close this window.
+            All computations have stopped. You may now close this window.
           </div>
         </div>
       </div>

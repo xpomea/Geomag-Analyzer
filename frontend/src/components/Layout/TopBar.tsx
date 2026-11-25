@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import {
-  Activity,
   Cpu,
   Loader2,
   Moon,
@@ -53,16 +52,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         <div className="topbar-actions">
-          {health ? (
-            <span className="pill pill-ok">
-              <Activity size={12} />
-              <span>
-                API {health.core_version} ({health.catalog_stations} st.)
-              </span>
-            </span>
-          ) : (
-            <span className="pill pill-warn">Connecting…</span>
-          )}
+          {!health && <span className="pill pill-warn">Connecting…</span>}
 
           <button
             type="button"
@@ -102,8 +92,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             disabled={state.serverStatus !== "running" || health?.can_shutdown === false}
             title={
               health?.can_shutdown === false
-                ? "Server shutdown is only available in desktop launcher / --browser mode"
-                : "Gracefully stop FastAPI server and worker pool"
+                ? "Available in desktop mode"
+                : "Close GeoMag Analyzer"
             }
           >
             <Power size={13} />
@@ -115,10 +105,9 @@ export const TopBar: React.FC<TopBarProps> = ({
       {confirmShutdown && (
         <div className="modal-backdrop">
           <div className="modal-card">
-            <div style={{ fontWeight: 600, fontSize: 15 }}>Stop GeoMag Analyzer Server?</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>Exit GeoMag Analyzer?</div>
             <div className="hint-text">
-              Sends <span className="mono">POST /api/shutdown</span> to gracefully terminate{" "}
-              <span className="mono">ProcessPoolExecutor</span> workers and close the local backend.
+              Active computations will be stopped and the application will close.
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button type="button" className="btn" onClick={() => setConfirmShutdown(false)}>
@@ -132,7 +121,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   void triggerShutdown();
                 }}
               >
-                Stop Server
+                Exit
               </button>
             </div>
           </div>
