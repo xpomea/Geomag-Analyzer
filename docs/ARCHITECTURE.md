@@ -3,7 +3,7 @@
 **Статус документа:** Базовая системная архитектура (этап M1)  
 **Целевой набор данных:** `GeoMag_Storms_Dataset_Oct-2026` (483 файла, 108 484 030 байт)  
 **Математическая спецификация:** `GeoMag Storms\Pc5_Pc6_Polarization_Formulas_INTERMAGNET_XYZ_RU.docx` (ред. 10.11.2026, 13 разделов, 48 уравнений, 22 таблицы)  
-**Выбранный стек (Вариант 1):** `Python FastAPI + NumPy/SciPy (+ Numba) + React/TypeScript + pywebview`
+**Выбранный стек (Вариант 1):** `Python FastAPI + NumPy/SciPy + React/TypeScript + pywebview`
 
 ---
 
@@ -16,7 +16,7 @@
 | Персона | Роль и окружение | Ключевые требования к системе |
 |---|---|---|
 | **Автор диссертации (исследователь)** | Основной разработчик и пользователь на Windows; готовит Главу 4 (сравнение 4 бурь, меридиональные профили, MLT-асимметрия, связь с `Vsw`/`Pdyn` и Форбуш-понижением `OULU`) | Строгое соответствие формулам и тестам Раздела 11 `.docx`; пакетный пересчёт; экспорт векторных графиков `SVG`/`PNG` и таблиц `CSV`; единое вычислительное ядро для UI и CLI-скриптов. |
-| **Сонаучрук и нетехнические исследователи** | Windows-ПК (включая университетские машины **без прав администратора** и потенциально **без интернета**) | Установка и запуск в один-два клика (распаковать `.zip` или запустить пользовательский инсталлятор); отсутствие Docker/WSL2/ручной настройки Python; мгновенный отклик на готовом кэше. |
+| **Нетехнические исследователи** | Windows-ПК (включая университетские машины **без прав администратора** и потенциально **без интернета**) | Установка и запуск в один-два клика (распаковать `.zip` или запустить пользовательский инсталлятор); отсутствие Docker/WSL2/ручной настройки Python; мгновенный отклик на нормализованных данных `Parquet` и пользовательском кэше `user_cache/`. |
 | **Вычислительный веб-сервер (опциональный режим)** | Сервер кафедры или VPS (Linux/Windows) под управлением `Nginx`/`Caddy` | Возможность развёртывания **той же кодовой базы** в режиме веб-сервиса для удалённого доступа по HTTP/WebSocket без переписывания прикладной логики. |
 
 ### 1.2. Обоснование выбора Варианта 1 и отказ от альтернатив
@@ -63,15 +63,15 @@
 |  • Роутеры: /api/catalog, /api/timeseries, /api/polarization, /api/cross, /api/jobs |
 |  • Раздача статического бандла React (встроенный dist/)                           |
 |  • JobManager: хэширование SHA-256, проверка кэша, Manager().Event/Queue IPC      |
-|  • Worker Pool: ProcessPoolExecutor (N_cpu - 1, NUMBA_NUM_THREADS=1) для Tier 3   |
+|  • Worker Pool: ProcessPoolExecutor (N_cpu - 1, BLAS=1 тред) для Tier 3           |
 +------------------+-------------------------------------------+--------------------+
                    |                                           |
 +------------------v-------------------+   +-------------------v--------------------+
 | ВЫЧИСЛИТЕЛЬНОЕ ЯДРО (geomag_core)    |   | СЛОЙ ETL, СТАТИКИ И RUNTIME-КЭША      |
-| (Pure Python + NumPy/SciPy + Numba)  |   | • Парсеры IAGA-2002/CSV/ASC/NetCDF     |
+| (Pure Python + NumPy/SciPy)          |   | • Парсеры IAGA-2002/CSV/ASC/NetCDF     |
 | • QC и сшивка штормов (§3)           |   | • data/raw/ (read-only первоисточник)  |
 | • Вариант A: Welch / Multitaper (§4) |   | • data/processed/ (read-only Parquet + |
-| • Вариант B: Подсегм.+SOS/FFT+Hilb   |   |   catalog.sqlite) + data/cache/ (предр.)|
+| • Вариант B: Подсегм.+SOS/FFT+Hilb   |   |   catalog.sqlite)                      |
 | • 2D Stokes & 3D Means/Samson (§5-6) |   | • Польз. runtime (%LOCALAPPDATA% /     |
 | • Пороги p_crit, gamma^2_crit (§5.9) |   |   ./user_data/):                       |
 | • Welch Cross (Фаза 2) и XWT/WTC+MC  |   |   - runtime.sqlite (jobs, user_cache)  |
@@ -83,7 +83,7 @@
 
 1. **Настольный режим (по умолчанию на Windows):**
    - Точка входа `launcher.py` обязательно вызывает **`multiprocessing.freeze_support()`** под `if __name__ == "__main__":` (обязательно для механизма `spawn` в `PyInstaller --onedir` на Windows), находит свободный локальный порт `127.0.0.1:<port>`, запускает `uvicorn` (`--workers 1`) в фоновом потоке и открывает окно `pywebview` (рендеринг через системный `Edge WebView2`).
-   - Внутри дочерних процессов `ProcessPoolExecutor` принудительно выставляется `NUMBA_NUM_THREADS=1`, чтобы исключить переподписку потоков $(N_{\text{cpu}}-1) \cdot N_{\text{cpu}}$.
+   - Внутри дочерних процессов `ProcessPoolExecutor` принудительно выставляются однопоточные ограничения BLAS (`OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`), чтобы исключить переподписку потоков $(N_{\text{cpu}}-1) \cdot N_{\text{cpu}}$.
    - **Механизм фолбэка (~20 строк кода):** если `WebView2 Runtime` отсутствует (старая версия Windows) или передан ключ `--browser`, лаунчер автоматически открывает системный браузер по умолчанию на `http://127.0.0.1:<port>?token=<bootstrap_token>`.
    - **Корректное завершение в обоих режимах:** при закрытии окна `pywebview` сервер `FastAPI` и воркеры `ProcessPoolExecutor` останавливаются штатно; для режима `--browser` при `console=False` (без окна терминала) в UI встроена кнопка **«Остановить сервер / Выход»** (`POST /api/shutdown` с session-token) и/или иконка выхода в системном трее Windows.
 2. **Режим веб-сервиса (Headless Server Mode):**
@@ -123,17 +123,17 @@
 
 ### 4.2. Схема данных и унифицированного кэширования (`Parquet` / `NPZ` + `SQLite`)
 
-Статический набор `data/processed/` + предрасчитанный `data/cache/` в дистрибутиве работают в режиме **read-only**, тогда как изменяемое состояние времени выполнения (`runtime.sqlite` и `user_cache/`) размещается в пользовательском каталоге **`%LOCALAPPDATA%\GeoMagAnalyzer\`** (или `./user_data/` в портативном режиме). Все кэш-ключи в `user_cache/` и `data/cache/` унифицированы по формуле `cache_key = sha256(core_version + canonical_params_json)`:
+Статический набор `data/processed/` в дистрибутиве работает в режиме **read-only**, тогда как изменяемое состояние времени выполнения (`runtime.sqlite` и `user_cache/`) размещается в пользовательском каталоге **`%LOCALAPPDATA%\GeoMagAnalyzer\`** (или `./user_data/` в портативном режиме). Все кэш-ключи в `user_cache/` унифицированы по формуле `cache_key = sha256(core_version + canonical_params_json)`:
 
 | Артефакт | Формат и режим | Содержимое и канонические ключи |
 |---|---|---|
 | `data/processed/catalog.sqlite` | `SQLite` (read-only в runtime) | Статические таблицы: `stations` (49 IAGA + OULU, канонические `lat/lon_180/elev`, `has_baseline`), `episodes` (4 шторма), `raw_manifest` (483 файла, SHA-256, `quality_code`), `availability` (матрица станция × дата × % валидности). |
-| `runtime.sqlite` (`%LOCALAPPDATA%` / `./user_data/`) | `SQLite` (WAL-режим, read-write) | Изменяемые таблицы исполнения: `jobs` (история, прогресс и статус фоновых расчётов), `cache_index` (`cache_key` $\to$ путь в `data/cache/` или `user_cache/`, размер, время создания). |
+| `runtime.sqlite` (`%LOCALAPPDATA%` / `./user_data/`) | `SQLite` (WAL-режим, read-write) | Изменяемые таблицы исполнения: `jobs` (история, прогресс и статус фоновых расчётов), `cache_index` (`cache_key` $\to$ путь в `user_cache/`, размер, время создания). |
 | `data/processed/geomag/*.parquet` | `Apache Parquet` (ZSTD, read-only) | Столбцы: `timestamp_utc`, `station_iaga`, `x_nT`, `y_nT`, `z_nT`, `f_scalar_nT`, `is_valid_xyz`, `is_interpolated`, `was_despiked`. Позволяет читать весь шторм в `NumPy` за $<20$ мс. |
 | `data/processed/solar_wind/*.parquet` | `Apache Parquet` (read-only) | `solar1_l1_1min.parquet` (`bx/by/bz` GSE/GSM, `n_p`, `T_p`, `vx/vy/vz`, `pdyn_nPa`, `swips_flags`, `sweep_offset_sec`) и `omni_bsn_1min.parquet` (все ключевые поля + `AE, AL, AU`). |
 | `data/processed/cosmic_rays/oulu_nm_1min.parquet` | `Apache Parquet` (read-only) | `timestamp_utc`, `uncorrected_cpm`, `corrected_cpm`, `pressure_mbar`. |
-| `data/cache/spectra_phase1/<sha256>.npz` (и в `user_cache/`) | `NPZ` (compressed) | Кэш оконных спектров $F_i(t, f)$ и масок валидных сегментов (Фаза 1 Уэлча). Поля ключа `canonical_params_json`: `{core_version, episode_id, station_iaga, component, coord_frame, d0_deg, L, M, detrend, window, qc_params}`. |
-| `data/cache/cross_wtc/<sha256>.npz` (и в `user_cache/`) | `NPZ` | Кэш матриц `XWT`/`WTC`, `COI`, фазовых углов и порогов 95% Монте-Карло. Поля ключа `canonical_params_json`: `{core_version, episode_id, pair, component, coord_frame, d0_deg, band_range, scales, wavelet, smoothing_params, n_surrogates, alpha, seed, qc_params}`. |
+| `user_cache/spectra_phase1/<sha256>.npz` | `NPZ` (compressed) | Runtime-кэш оконных спектров $F_i(t, f)$ и масок валидных сегментов (Фаза 1 Уэлча). Поля ключа `canonical_params_json`: `{core_version, episode_id, station_iaga, component, coord_frame, d0_deg, L, M, detrend, window, qc_params}`. |
+| `user_cache/cross_wtc/<sha256>.npz` | `NPZ` | Runtime-кэш матриц `XWT`/`WTC`, `COI`, фазовых углов и порогов 95% Монте-Карло. Поля ключа `canonical_params_json`: `{core_version, episode_id, pair, component, coord_frame, d0_deg, band_range, scales, wavelet, smoothing_params, n_surrogates, alpha, seed, qc_params}`. |
 
 ---
 
@@ -223,7 +223,7 @@
 2. **Вычисление CWT и XWT:** $W_i(t, s)$ и $W_j(t, s)$ через быструю свёртку в Фурье-пространстве; кросс-вейвлет $W_{ij}(t, s) = W_i(t, s)\,W_j^*(t, s)$, локальная фаза $\arg W_{ij}(t, s)$ (визуализируется стрелками) и **конус влияния (`COI` + `gap-COI`)**, за пределами которого граничные эффекты искажают спектр.
 3. **Вейвлет-когерентность (`WTC`):**
    $$R^2(t, s) = \frac{\left| S\!\left(s^{-1} W_{ij}(t, s)\right) \right|^2}{S\!\left(s^{-1} |W_i(t, s)|^2\right) \cdot S\!\left(s^{-1} |W_j(t, s)|^2\right)},$$
-   где $S(\cdot)$ — оператор сглаживания по времени (окно Гаусса $\propto e^{-t^2/(2s^2)}$) и по масштабу (прямоугольное окно шириной $\Delta j$). Сглаживание реализуется через **`Numba @njit` (с `NUMBA_NUM_THREADS=1` внутри воркеров `ProcessPoolExecutor`)** или векторизованную FFT-свёртку (с чистым `NumPy/SciPy` фолбэком).
+   где $S(\cdot)$ — оператор сглаживания по времени (окно Гаусса $\propto e^{-t^2/(2s^2)}$ через векторизованную FFT-свёртку) и по масштабу (дробно-окновое сглаживание на `NumPy`), а суррогаты AR(1) генерируются через `scipy.signal.lfilter` (с однопоточным BLAS внутри воркеров `ProcessPoolExecutor`).
 4. **Значимость по методу Монте-Карло (основной источник длительности):**
    - По валидным подсегментам $x_i, x_j$ оцениваются коэффициенты авторегрессии $\alpha_1^{(i)}, \alpha_1^{(j)}$ (модель красного шума AR(1)).
    - В воркерах `ProcessPoolExecutor` генерируется $N_{\text{MC}} \in [300, 1000]$ пар независимых AR(1) суррогатов, для каждой рассчитывается `WTC`, и на каждом масштабе $s$ определяется 95%-й перцентиль $R_{95}^2(s)$ (внутри `COI`).
@@ -232,14 +232,14 @@
 
 | Уровень | Целевое время отклика | Операции | Механизм исполнения |
 |---|---|---|---|
-| **Tier 1 (Мгновенный)** | $< 0.3\text{ с}$ | Переключение станций/штормов, зум, пересчёт порогов $\alpha \in \{0.05, 0.01\}$, загрузка предрасчитанного кэша | Синхронный ответ `FastAPI` из `Parquet`/`NPZ` кэша |
+| **Tier 1 (Мгновенный)** | $< 0.3\text{ с}$ | Переключение станций/штормов, зум, пересчёт порогов $\alpha \in \{0.05, 0.01\}$, загрузка кэша из `user_cache/` | Синхронный ответ `FastAPI` из `Parquet`/`NPZ` кэша |
 | **Tier 2 (Интерактивный)** | $< 2\text{ с}$ | Расчёт Варианта A/B для станции, 2D/3D Стокс, двухфазный кросс-спектр Уэлча (вкл. 1 176 пар при прогретой Фазе 1) | `FastAPI` threadpool (`NumPy`/`SciPy` освобождают GIL) |
 | **Tier 3 (Асинхронный)** | Десятки секунд — минуты | `XWT`/`WTC` + 300–1000 суррогатов Монте-Карло, динамическая матрица Уэлча $49\times 49$ без кэша, MC-калибровка эффективного $n$ | Очередь `ProcessPoolExecutor` + WebSocket/SSE прогресс + дисковый кэш |
 
 **Протокол асинхронной задачи (`JobManager`):**
 1. Запрос `POST /api/jobs/wtc` формирует канонический ключ кэша `cache_key = sha256(core_version + canonical_params_json)` (единый стандарт с §4.2).
-2. Если результат уже есть в `data/cache/` (предрасчёт) или в `cache_index` (`runtime.sqlite`), немедленно возвращается `status: "cached"` со ссылкой на результат.
-3. Иначе задача помещается в `ProcessPoolExecutor` (с `NUMBA_NUM_THREADS=1`), клиенту возвращается `job_id`, а прогресс (`progress_pct`, `stage`, `eta_sec`) передаётся от воркеров через **`multiprocessing.Manager().Queue()`** (или SQLite-поллинг) и транслируется по `WebSocket` (`/ws/jobs/{job_id}`) или `SSE` (`/api/jobs/{job_id}/events`).
+2. Если результат уже есть в `user_cache/` (и/или `cache_index` в `runtime.sqlite`), немедленно возвращается `status: "cached"` со ссылкой на результат.
+3. Иначе задача помещается в `ProcessPoolExecutor` (с однопоточными ограничениями BLAS `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`), клиенту возвращается `job_id`, а прогресс (`progress_pct`, `stage`, `eta_sec`) передаётся от воркеров через **`multiprocessing.Manager().Queue()`** (или SQLite-поллинг) и транслируется по `WebSocket` (`/ws/jobs/{job_id}`) или `SSE` (`/api/jobs/{job_id}/events`).
 4. **Отмена (`DELETE /api/jobs/{job_id}`):** устанавливает разделяемый флаг **`multiprocessing.Manager().Event()`** (сериализуемый под Windows `spawn`, в отличие от голого `multiprocessing.Event`) или файловый/SQLite `cancel_token`, который проверяется между батчами Монте-Карло; прерванная задача очищает временные файлы и переводит статус в `cancelled` в `runtime.sqlite`.
 
 ---
@@ -278,15 +278,15 @@
 
 ### 8.1. Сборка настольного дистрибутива для Windows (приоритет №1)
 
-1. **Сборщик:** `PyInstaller --onedir` (единая папка с `GeoMagAnalyzer.exe` и библиотеками; реалистичный объём **~250–450+ МБ** на диске с учётом `NumPy`, `SciPy`, `Numba/llvmlite`, `PyArrow`, `pywebview`, `frontend/dist/`, `data/processed/` и предрасчитанного `data/cache/`; холодный старт `1–2 с` без задержки самораспаковки `--onefile` и с минимальным риском ложного срабатывания антивируса). Обязателен вызов `multiprocessing.freeze_support()` в точке входа `launcher.py` и `NUMBA_NUM_THREADS=1` в воркерах.
+1. **Сборщик:** `PyInstaller --onedir` (единая папка с `GeoMagAnalyzer.exe` и библиотеками; упаковываются `NumPy`, `SciPy`, `PyArrow`, `pywebview`, `frontend/dist/` и `data/processed/`; холодный старт `1–2 с` без задержки самораспаковки `--onefile` и с минимальным риском ложного срабатывания антивируса). Обязателен вызов `multiprocessing.freeze_support()` в точке входа `launcher.py` и однопоточный BLAS (`OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`) в воркерах.
 2. **Разделение статики и пользовательских данных:**
-   - Внутри каталога установки/бандла `data/processed/` (`catalog.sqlite`, `.parquet`) и предрасчитанный `data/cache/` открываются строго **read-only** (безопасно при обновлении инсталлятора и запуске с носителей без прав записи).
+   - Внутри каталога установки/бандла `data/processed/` (`catalog.sqlite`, `.parquet`) и `frontend/dist/` открываются строго **read-only** (безопасно при обновлении инсталлятора и запуске с носителей без прав записи).
    - Изменяемые `runtime.sqlite` (`jobs`, `cache_index`) и пользовательский кэш `user_cache/` записываются в **`%LOCALAPPDATA%\GeoMagAnalyzer\`** (для `Inno Setup`) либо в `./user_data/` (для портативного `.zip` при наличии прав записи с автоматическим фолбэком в `%LOCALAPPDATA%\GeoMagAnalyzer\`).
 3. **Два формата поставки без прав администратора:**
    - **Портативный `.zip` (`GeoMagAnalyzer_Portable_Win64.zip`):** распаковка в любую пользовательскую папку (вплоть до флешки) и запуск `GeoMagAnalyzer.exe` двойным кликом; никаких записей в `Program Files` или системный реестр.
    - **Установщик `Inno Setup` (`GeoMagAnalyzer_Setup.exe`):** настроен с `PrivilegesRequired=lowest` (установка в `{localappdata}\Programs\GeoMagAnalyzer` и ярлык на рабочем столе текущего пользователя без запроса UAC).
    - **Управление процессом в `--browser` (`console=False`):** UI содержит кнопку «Остановить сервер / Выход» (`POST /api/shutdown` с session-token) и/или иконку системного трея Windows для чистого завершения сервера без диспетчера задач.
-4. **Предпрогретый комплект данных:** дистрибутив поставляется с уже выполненным ETL и предрасчитанным базовым кэшем для всех 4 бурь октября 2026 года (включая ключевые пары `XWT`/`WTC` и все 49×49 спектры Фазы 1 Уэлча), чтобы сонаучрук открывал готовые графики сразу после запуска.
+4. **Комплект данных и runtime-кэш:** дистрибутив поставляется с уже выполненным ETL (`data/processed/`); спектры Фазы 1 Уэлча и результаты `XWT`/`WTC` сохраняются по мере расчёта в пользовательском `user_cache/` для мгновенного повторного открытия.
 
 ### 8.2. Развёртывание в режиме веб-сервиса
 
@@ -309,11 +309,10 @@ ONU_Thesis/
 │   ├── ROADMAP.md                    # Полная дорожная карта (R2)
 │   └── DATA_ORGANIZATION_ASSESSMENT.md # Аудит и схема реорганизации данных (R3)
 ├── data/                             # Генерируемые статические данные (в .gitignore, read-only в runtime)
-│   ├── processed/                    # Parquet + catalog.sqlite + manifest.parquet (результат ETL)
-│   └── cache/                        # Предрасчитанный кэш спектров Фазы 1 и XWT/WTC Монте-Карло
+│   └── processed/                    # Parquet + catalog.sqlite + manifest.parquet (результат ETL)
 ├── backend/
 │   ├── pyproject.toml
-│   ├── geomag_core/                  # Независимое вычислительное ядро (Pure Python/NumPy/SciPy/Numba)
+│   ├── geomag_core/                  # Независимое вычислительное ядро (Pure Python/NumPy/SciPy)
 │   │   ├── conventions.py            # Диапазоны Pc5/Pc6, HDZ->XYZ, D0-поворот (guard has_baseline), QC §3.2 + деспайк
 │   │   ├── spectral.py               # Вариант A (Welch, Hann, OLS detrend, Multitaper)
 │   │   ├── oversampling.py           # Вариант B (§7): FFT zero-pad + odd reflect, Kaiser FIR
@@ -341,7 +340,7 @@ ONU_Thesis/
 │   │   ├── routes_cross.py           # /api/cross/welch
 │   │   └── routes_jobs.py            # /api/jobs + WS /ws/jobs/{job_id} + SSE
 │   ├── launcher.py                   # freeze_support(), pywebview + --browser + tray/UI shutdown
-│   └── scripts/                      # CLI: etl_build.py (обёртка над geomag_etl.build), precompute_oct2026.py, thesis_figures.py
+│   └── scripts/                      # CLI: etl_build.py (обёртка над geomag_etl.build), thesis_figures.py
 ├── tests/
 │   ├── verification/                 # Автотесты по .docx §11 (Случаи 0, A, B, C, D, E, Таблица 11)
 │   ├── unit/                         # Тесты ETL и core (HDZF, GUI/LON, GCK/NCK, VAL/OTT, SWiPS, OMNI, NaN-сегменты)
@@ -358,6 +357,6 @@ ONU_Thesis/
 │       │   └── JobMonitor/           # Индикатор прогресса Tier 3, отмена, выход --browser, экспорт SVG/PNG/CSV
 │       └── store/
 └── packaging/
-    ├── geomag_analyzer.spec          # PyInstaller --onedir спецификация
+    ├── geomag_analyzer.spec          # PyInstaller --onedir спецификация (data/processed/ + frontend/dist/)
     └── installer.iss                 # Скрипт Inno Setup (PrivilegesRequired=lowest)
 ```

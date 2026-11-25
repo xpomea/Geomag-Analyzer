@@ -1,4 +1,4 @@
-"""Unit tests for PyInstaller frozen path resolution, Numba cache guard, and worker isolation."""
+"""Unit tests for PyInstaller frozen path resolution and worker isolation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from pathlib import Path
 
 from geomag_api import config as api_config
 from geomag_api.data_store import canonicalize_station_pair
-from geomag_core.cross_wavelet import _should_enable_numba_cache
 
 
 def test_frozen_paths_and_portable_mode_marker(tmp_path: Path, monkeypatch):
@@ -38,17 +37,11 @@ def test_frozen_paths_and_portable_mode_marker(tmp_path: Path, monkeypatch):
     assert settings_inno.static_cache_dir == internal_dir.resolve() / "data" / "cache"
     assert settings_inno.frontend_dist_dir == internal_dir.resolve() / "frontend" / "dist"
     assert settings_inno.user_data_dir == local_app_data / "GeoMagAnalyzer"
-    assert _should_enable_numba_cache() is False
 
     # With portable.mode marker next to exe, writable install_dir uses ./user_data
     (install_dir / api_config.PORTABLE_MARKER_FILENAME).write_text("1", encoding="utf-8")
     settings_portable = api_config.ApiSettings.from_env()
     assert settings_portable.user_data_dir == install_dir.resolve() / "user_data"
-
-
-def test_numba_cache_enabled_when_not_frozen(monkeypatch):
-    monkeypatch.setattr(sys, "frozen", False, raising=False)
-    assert _should_enable_numba_cache() is True
 
 
 def test_canonicalize_station_pair_west_north_and_iaga_tiebreak():
@@ -67,16 +60,28 @@ def test_canonicalize_station_pair_west_north_and_iaga_tiebreak():
     assert (a3["iaga_code"], b3["iaga_code"], swapped3) == ("NTH", "STH", True)
 
 
-def test_importing_workers_does_not_eagerly_import_main_fastapi_or_numba():
+def test_importing_workers_isolates_main_fastapi_and_has_no_numba():
     code = (
-        "import sys, geomag_api.workers as w; "
+        "import importlib.util, os, sys, geomag_api.workers as w; "
         "assert 'geomag_api.main' not in sys.modules; "
         "assert 'fastapi' not in sys.modules; "
+        "assert 'geomag_core' not in sys.modules; "
         "assert 'numba' not in sys.modules; "
+        "assert 'llvmlite' not in sys.modules; "
+        "assert importlib.util.find_spec('numba') is None; "
+        "assert importlib.util.find_spec('llvmlite') is None; "
         "w.worker_init(); "
+        "assert os.environ.get('OMP_NUM_THREADS') == '1'; "
+        "assert os.environ.get('MKL_NUM_THREADS') == '1'; "
+        "assert os.environ.get('OPENBLAS_NUM_THREADS') == '1'; "
+        "assert os.environ.get('NUMEXPR_NUM_THREADS') == '1'; "
+        "assert 'NUMBA_NUM_THREADS' not in os.environ; "
+        "import geomag_core; "
+        "assert not hasattr(geomag_core, 'HAS_NUMBA'); "
         "print('OK')"
     )
     env = dict(os.environ)
+    env.pop("NUMBA_NUM_THREADS", None)
     res = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,

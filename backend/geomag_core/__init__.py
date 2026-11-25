@@ -31,7 +31,6 @@ from .conventions import (
     xyz_to_hdz,
 )
 from .cross_wavelet import (
-    HAS_NUMBA,
     MORLET_COI_FACTOR,
     MORLET_DJ0,
     MORLET_FOURIER_FACTOR,
@@ -126,7 +125,6 @@ __all__ = [
     "BandSpec",
     "CalculationCancelledError",
     "DT_1MIN_SEC",
-    "HAS_NUMBA",
     "IGRF14_EPOCH",
     "IGRF14_NORTH_POLE_LAT_DEG",
     "IGRF14_NORTH_POLE_LON_DEG",

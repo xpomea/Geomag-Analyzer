@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,14 +13,6 @@ from scipy.signal import lfilter
 
 from .analytic import find_valid_subsegments
 from .conventions import DT_1MIN_SEC, CalculationCancelledError, canonical_cache_key
-
-try:
-    import numba as _numba
-
-    HAS_NUMBA = True
-except ImportError:  # pragma: no cover
-    _numba = None
-    HAS_NUMBA = False
 
 MORLET_OMEGA0 = 6.0
 MORLET_FOURIER_FACTOR = (4.0 * math.pi) / (MORLET_OMEGA0 + math.sqrt(2.0 + MORLET_OMEGA0 ** 2))
@@ -169,79 +160,6 @@ def _smooth_scale_boxcar_numpy(arr_2d: np.ndarray, width: float) -> np.ndarray:
     return out
 
 
-def _should_enable_numba_cache() -> bool:
-    """Disable Numba disk cache in frozen PyInstaller bundles lacking .py locators."""
-    return not bool(getattr(sys, "frozen", False))
-
-
-_NUMBA_CACHE = _should_enable_numba_cache()
-
-if HAS_NUMBA:
-
-    @_numba.njit(cache=_NUMBA_CACHE)
-    def _smooth_scale_boxcar_numba(arr_2d: np.ndarray, width: float) -> np.ndarray:
-        n_scales, n_cols = arr_2d.shape
-        out = np.empty((n_scales, n_cols), dtype=np.float64)
-        if width <= 1.0 or n_scales <= 1:
-            for i in range(n_scales):
-                for j in range(n_cols):
-                    out[i, j] = arr_2d[i, j]
-            return out
-
-        half_w = 0.5 * (width - 1.0)
-        k_full = int(math.floor(half_w))
-        frac = half_w - float(k_full)
-        for i in range(n_scales):
-            lo_full = i - k_full
-            if lo_full < 0:
-                lo_full = 0
-            hi_full = i + k_full + 1
-            if hi_full > n_scales:
-                hi_full = n_scales
-            w_sum = float(hi_full - lo_full)
-            left_idx = i - k_full - 1
-            right_idx = i + k_full + 1
-            has_left = frac > 0.0 and left_idx >= 0
-            has_right = frac > 0.0 and right_idx < n_scales
-            if has_left:
-                w_sum += frac
-            if has_right:
-                w_sum += frac
-            inv_w = 1.0 / w_sum
-
-            for j in range(n_cols):
-                acc = 0.0
-                for r in range(lo_full, hi_full):
-                    acc += arr_2d[r, j]
-                if has_left:
-                    acc += frac * arr_2d[left_idx, j]
-                if has_right:
-                    acc += frac * arr_2d[right_idx, j]
-                out[i, j] = acc * inv_w
-        return out
-
-    @_numba.njit(cache=_NUMBA_CACHE)
-    def _generate_ar1_numba(noise_2d: np.ndarray, alpha: float) -> np.ndarray:
-        n_rows, n_cols = noise_2d.shape
-        out = np.empty((n_rows, n_cols), dtype=np.float64)
-        scale = math.sqrt(max(0.0, 1.0 - alpha * alpha))
-        for r in range(n_rows):
-            prev = noise_2d[r, 0]
-            out[r, 0] = prev
-            for c in range(1, n_cols):
-                prev = alpha * prev + scale * noise_2d[r, c]
-                out[r, c] = prev
-        return out
-
-else:  # pragma: no cover
-
-    def _smooth_scale_boxcar_numba(arr_2d: np.ndarray, width: float) -> np.ndarray:
-        return _smooth_scale_boxcar_numpy(arr_2d, width)
-
-    def _generate_ar1_numba(noise_2d: np.ndarray, alpha: float) -> np.ndarray:
-        return _generate_ar1_numpy(noise_2d, alpha)
-
-
 def _generate_ar1_numpy(noise_2d: np.ndarray, alpha: float) -> np.ndarray:
     n_rows, n_cols = noise_2d.shape
     if n_cols <= 1:
@@ -267,12 +185,6 @@ def _build_time_gauss_kernels(
     return gauss_hat, n_pad_t
 
 
-def _smooth_scale_dispatch(arr_2d: np.ndarray, width: float, use_numba: bool) -> np.ndarray:
-    if use_numba and HAS_NUMBA:
-        return _smooth_scale_boxcar_numba(np.ascontiguousarray(arr_2d, dtype=np.float64), width)
-    return _smooth_scale_boxcar_numpy(arr_2d, width)
-
-
 def smooth_wavelet_matrix(
     arr: np.ndarray,
     scales: np.ndarray,
@@ -280,7 +192,6 @@ def smooth_wavelet_matrix(
     dt: float = DT_1MIN_SEC,
     dj: float = 1.0 / 12.0,
     omega0: float = MORLET_OMEGA0,
-    use_numba: bool = True,
 ) -> np.ndarray:
     """Apply Grinsted et al. (2004) Gaussian time smoothing + fractional boxcar scale smoothing."""
     data = np.asarray(arr)
@@ -293,14 +204,14 @@ def smooth_wavelet_matrix(
     if np.iscomplexobj(data):
         spec = np.fft.fft(data, n=n_pad_t, axis=1)
         t_smooth = np.fft.ifft(spec * gauss_hat, axis=1)[:, :n_samples]
-        re_s = _smooth_scale_dispatch(t_smooth.real, width, use_numba)
-        im_s = _smooth_scale_dispatch(t_smooth.imag, width, use_numba)
+        re_s = _smooth_scale_boxcar_numpy(t_smooth.real, width)
+        im_s = _smooth_scale_boxcar_numpy(t_smooth.imag, width)
         return re_s + 1j * im_s
 
     spec = np.fft.rfft(data.astype(np.float64, copy=False), n=n_pad_t, axis=1)
     gauss_r = gauss_hat[:, : n_pad_t // 2 + 1]
     t_smooth = np.fft.irfft(spec * gauss_r, n=n_pad_t, axis=1)[:, :n_samples]
-    return _smooth_scale_dispatch(t_smooth, width, use_numba)
+    return _smooth_scale_boxcar_numpy(t_smooth, width)
 
 
 def estimate_ar1(x_1d: np.ndarray) -> float:
@@ -374,7 +285,6 @@ def _compute_xwt_wtc_segment(
     dt: float,
     dj: float,
     omega0: float,
-    use_numba: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     w_i, coi_p = morlet_cwt_single(seg_i, scales, dt=dt, omega0=omega0)
     w_j, _ = morlet_cwt_single(seg_j, scales, dt=dt, omega0=omega0)
@@ -382,7 +292,7 @@ def _compute_xwt_wtc_segment(
 
     inv_s = (1.0 / scales)[:, None]
     s_wij = smooth_wavelet_matrix(
-        inv_s * w_ij, scales, dt=dt, dj=dj, omega0=omega0, use_numba=use_numba
+        inv_s * w_ij, scales, dt=dt, dj=dj, omega0=omega0
     )
     s_wi2 = smooth_wavelet_matrix(
         inv_s * (w_i.real ** 2 + w_i.imag ** 2),
@@ -390,7 +300,6 @@ def _compute_xwt_wtc_segment(
         dt=dt,
         dj=dj,
         omega0=omega0,
-        use_numba=use_numba,
     )
     s_wj2 = smooth_wavelet_matrix(
         inv_s * (w_j.real ** 2 + w_j.imag ** 2),
@@ -398,7 +307,6 @@ def _compute_xwt_wtc_segment(
         dt=dt,
         dj=dj,
         omega0=omega0,
-        use_numba=use_numba,
     )
 
     denom = np.maximum(s_wi2 * s_wj2, 1e-30)
@@ -420,7 +328,6 @@ def _run_wtc_monte_carlo(
     alpha: float,
     seed: int,
     batch_size: int | None,
-    use_numba: bool,
     progress_callback: ProgressCallback | None,
     cancel_check: CancelCheck | None,
 ) -> np.ndarray:
@@ -458,7 +365,6 @@ def _run_wtc_monte_carlo(
     ]
 
     rng = np.random.default_rng(seed)
-    ar_fn = _generate_ar1_numba if (use_numba and HAS_NUMBA) else _generate_ar1_numpy
     remaining = int(n_surrogates)
     completed = 0
 
@@ -467,8 +373,8 @@ def _run_wtc_monte_carlo(
             raise CalculationCancelledError("XWT/WTC Monte Carlo cancelled before batch.")
 
         cur = min(eff_batch, remaining)
-        sur_i = ar_fn(rng.standard_normal((cur, n_samples)), float(alpha1_i))
-        sur_j = ar_fn(rng.standard_normal((cur, n_samples)), float(alpha1_j))
+        sur_i = _generate_ar1_numpy(rng.standard_normal((cur, n_samples)), float(alpha1_i))
+        sur_j = _generate_ar1_numpy(rng.standard_normal((cur, n_samples)), float(alpha1_j))
         sur_i -= np.mean(sur_i, axis=1, keepdims=True)
         sur_j -= np.mean(sur_j, axis=1, keepdims=True)
 
@@ -503,10 +409,10 @@ def _run_wtc_monte_carlo(
         del w_ij
 
         for b_idx in range(cur):
-            s_re = _smooth_scale_dispatch(t_wij[b_idx].real, width, use_numba)
-            s_im = _smooth_scale_dispatch(t_wij[b_idx].imag, width, use_numba)
-            s_ii = _smooth_scale_dispatch(t_pi[b_idx], width, use_numba)
-            s_jj = _smooth_scale_dispatch(t_pj[b_idx], width, use_numba)
+            s_re = _smooth_scale_boxcar_numpy(t_wij[b_idx].real, width)
+            s_im = _smooth_scale_boxcar_numpy(t_wij[b_idx].imag, width)
+            s_ii = _smooth_scale_boxcar_numpy(t_pi[b_idx], width)
+            s_jj = _smooth_scale_boxcar_numpy(t_pj[b_idx], width)
             r2 = np.clip((s_re ** 2 + s_im ** 2) / np.maximum(s_ii * s_jj, 1e-30), 0.0, 1.0)
             bin_idx = np.minimum(n_bins - 1, (r2 * float(n_bins)).astype(np.int64))
             for s_idx in range(n_scales):
@@ -589,7 +495,6 @@ def compute_xwt_wtc(
     alpha: float = 0.05,
     seed: int = 42,
     batch_size: int | None = None,
-    use_numba: bool = True,
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
     core_version: str = "0.1.0",
@@ -639,7 +544,6 @@ def compute_xwt_wtc(
                 dt=dt,
                 dj=dj,
                 omega0=omega0,
-                use_numba=use_numba,
             )
             w_i_full[:, s_idx:e_idx] = wi
             w_j_full[:, s_idx:e_idx] = wj
@@ -660,7 +564,6 @@ def compute_xwt_wtc(
             dt=dt,
             dj=dj,
             omega0=omega0,
-            use_numba=use_numba,
         )
         w_i_full[:] = wi
         w_j_full[:] = wj
@@ -701,7 +604,6 @@ def compute_xwt_wtc(
             alpha=alpha,
             seed=seed,
             batch_size=batch_size,
-            use_numba=use_numba,
             progress_callback=progress_callback,
             cancel_check=cancel_check,
         )

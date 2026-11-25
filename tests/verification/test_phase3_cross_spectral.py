@@ -254,7 +254,7 @@ def test_xwt_wtc_nan_subsegments_and_gap_coi():
     assert np.all(np.isfinite(res_real.wtc_r2[res_real.inside_coi]))
 
 
-def test_wtc_monte_carlo_significance_progress_cancel_and_numba_parity():
+def test_wtc_monte_carlo_significance_progress_and_cancel():
     rng = np.random.default_rng(99)
     n_pts = 720
     t = np.arange(n_pts, dtype=np.float64) * gc.DT_1MIN_SEC
@@ -274,22 +274,13 @@ def test_wtc_monte_carlo_significance_progress_cancel_and_numba_parity():
     def _on_prog(done: int, total: int, stage: str) -> None:
         progress_log.append((done, total, stage))
 
-    res_nb = gc.compute_xwt_wtc(
+    res = gc.compute_xwt_wtc(
         x1,
         x2,
         n_surrogates=100,
         seed=42,
         batch_size=25,
-        use_numba=True,
         progress_callback=_on_prog,
-    )
-    res_np = gc.compute_xwt_wtc(
-        x1,
-        x2,
-        n_surrogates=100,
-        seed=42,
-        batch_size=25,
-        use_numba=False,
     )
 
     assert progress_log == [
@@ -298,15 +289,11 @@ def test_wtc_monte_carlo_significance_progress_cancel_and_numba_parity():
         (75, 100, "monte_carlo"),
         (100, 100, "monte_carlo"),
     ]
-    assert res_nb.wtc_sig95 is not None
-    assert np.all((res_nb.wtc_sig95 > 0.0) & (res_nb.wtc_sig95 <= 1.0))
+    assert res.wtc_sig95 is not None
+    assert np.all((res.wtc_sig95 > 0.0) & (res.wtc_sig95 <= 1.0))
 
-    s_idx = int(np.argmin(np.abs(res_nb.periods_sec - 300.0)))
-    assert bool(res_nb.wtc_is_significant[s_idx, 360]) is True
-
-    # Parity between Numba JIT and pure-NumPy fallback
-    assert np.allclose(res_nb.wtc_r2, res_np.wtc_r2, atol=1e-12)
-    assert np.allclose(res_nb.wtc_sig95, res_np.wtc_sig95, atol=1e-12)
+    s_idx = int(np.argmin(np.abs(res.periods_sec - 300.0)))
+    assert bool(res.wtc_is_significant[s_idx, 360]) is True
 
     # Cancellation token test: cancel after batch 2
     batch_counter = {"n": 0}

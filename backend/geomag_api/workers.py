@@ -11,40 +11,25 @@ from typing import Any
 
 
 def worker_init() -> None:
-    """Enforce single-threaded BLAS/Numba execution inside each ProcessPool worker."""
+    """Enforce single-threaded BLAS execution inside each ProcessPool worker."""
     for env_var in (
-        "NUMBA_NUM_THREADS",
         "OMP_NUM_THREADS",
         "MKL_NUM_THREADS",
         "OPENBLAS_NUM_THREADS",
         "NUMEXPR_NUM_THREADS",
     ):
         os.environ[env_var] = "1"
-    numba_mod = sys.modules.get("numba")
-    if numba_mod is not None:
-        try:
-            numba_mod.set_num_threads(1)
-        except Exception:
-            pass
 
 
 def inspect_worker_runtime() -> dict[str, Any]:
-    """Return worker thread configuration and loaded module state (for spawn diagnostics)."""
+    """Return worker BLAS thread limits and loaded module state (for spawn diagnostics)."""
     main_loaded = "geomag_api.main" in sys.modules
     fastapi_loaded = "fastapi" in sys.modules
-    numba_threads: int | None = None
-    numba_config_threads: int | None = None
-    try:
-        import numba
-
-        numba_config_threads = int(numba.config.NUMBA_NUM_THREADS)
-        numba_threads = int(numba.get_num_threads())
-    except Exception:
-        pass
     return {
-        "env_numba_threads": os.environ.get("NUMBA_NUM_THREADS"),
-        "numba_config_threads": numba_config_threads,
-        "numba_get_num_threads": numba_threads,
+        "omp_num_threads": os.environ.get("OMP_NUM_THREADS"),
+        "mkl_num_threads": os.environ.get("MKL_NUM_THREADS"),
+        "openblas_num_threads": os.environ.get("OPENBLAS_NUM_THREADS"),
+        "numexpr_num_threads": os.environ.get("NUMEXPR_NUM_THREADS"),
         "main_loaded": main_loaded,
         "fastapi_loaded": fastapi_loaded,
     }
@@ -187,7 +172,6 @@ def execute_wtc_job(
             n_surrogates=n_surrogates,
             alpha=float(params["alpha"]),
             seed=int(params["seed"]),
-            use_numba=True,
             progress_callback=_emit_progress,
             cancel_check=cancel_event.is_set,
             core_version=str(params["core_version"]),
