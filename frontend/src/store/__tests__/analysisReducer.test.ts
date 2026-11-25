@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EpisodeInfo, JobStatusResponse, StationInfo } from "../../api/types";
+import {
+  RECENT_PAIRS_STORAGE_KEY,
+  loadRecentPairs,
+  saveRecentPairs,
+} from "../../utils/recentPairs";
 import {
   INITIAL_ANALYSIS_STATE,
   MIN_ZOOM_SPAN_MS,
@@ -228,5 +233,92 @@ describe("analysisReducer & state guards", () => {
     });
     expect(sWtc.activeDeckTab).toBe("wtc");
     expect(sWtc.activeCrossTab).toBe("wtc");
+  });
+
+  it("tracks MRU recentPairs with A-B/B-A deduplication, A===B guard, recordRecent=false, and safe localStorage", () => {
+    expect(INITIAL_ANALYSIS_STATE.recentPairs).toEqual([]);
+
+    // Degenerate pair A === B is ignored
+    const same = analysisReducer(INITIAL_ANALYSIS_STATE, {
+      type: "SET_STATION_A",
+      stationIaga: "BEL",
+    });
+    expect(same.recentPairs).toEqual([]);
+
+    // Map 1st click (recordRecent: false) does not pollute history
+    const firstClick = analysisReducer(INITIAL_ANALYSIS_STATE, {
+      type: "SET_STATION_A",
+      stationIaga: "HRN",
+      recordRecent: false,
+    });
+    expect(firstClick.recentPairs).toEqual([]);
+
+    // Selecting Station B, SET_PAIR, OPEN_WTC_JOB, and Swap populates MRU up to 6
+    let st = analysisReducer(INITIAL_ANALYSIS_STATE, {
+      type: "SET_STATION_B",
+      stationIaga: "OTT",
+    });
+    expect(st.recentPairs).toEqual([{ a: "LVV", b: "OTT" }]);
+
+    st = analysisReducer(st, { type: "SET_PAIR", stationA: "HRN", stationB: "LVV" });
+    st = analysisReducer(st, {
+      type: "OPEN_WTC_JOB",
+      jobId: "j-wtc",
+      episodeId: st.episodeId,
+      stationA: "BEL",
+      stationB: "WNG",
+      component: "X",
+      coordFrame: "XYZ",
+    });
+    st = analysisReducer(st, { type: "SET_STATION_A", stationIaga: "NUR" });
+    st = analysisReducer(st, { type: "SET_STATION_B", stationIaga: "SOD" });
+    st = analysisReducer(st, { type: "SET_PAIR", stationA: "DUR", stationB: "IZN" });
+    st = analysisReducer(st, { type: "SET_PAIR", stationA: "CLF", stationB: "NGK" });
+    expect(st.recentPairs).toEqual([
+      { a: "CLF", b: "NGK" },
+      { a: "DUR", b: "IZN" },
+      { a: "NUR", b: "SOD" },
+      { a: "NUR", b: "WNG" },
+      { a: "BEL", b: "WNG" },
+      { a: "HRN", b: "LVV" },
+    ]);
+
+    // Deduplicates reversed pair B-A and promotes to MRU front while preserving length 6
+    st = analysisReducer(st, { type: "SET_PAIR", stationA: "WNG", stationB: "BEL" });
+    expect(st.recentPairs).toEqual([
+      { a: "WNG", b: "BEL" },
+      { a: "CLF", b: "NGK" },
+      { a: "DUR", b: "IZN" },
+      { a: "NUR", b: "SOD" },
+      { a: "NUR", b: "WNG" },
+      { a: "HRN", b: "LVV" },
+    ]);
+
+    // Clicking a recent chip (recordRecent: false) switches active pair without reordering chips
+    const chipClicked = analysisReducer(st, {
+      type: "SET_PAIR",
+      stationA: "HRN",
+      stationB: "LVV",
+      recordRecent: false,
+    });
+    expect(chipClicked.stationA).toBe("HRN");
+    expect(chipClicked.stationB).toBe("LVV");
+    expect(chipClicked.recentPairs).toEqual(st.recentPairs);
+
+    // localStorage persistence & error resilience
+    window.localStorage.removeItem(RECENT_PAIRS_STORAGE_KEY);
+    saveRecentPairs(st.recentPairs);
+    expect(loadRecentPairs()).toEqual(st.recentPairs);
+
+    window.localStorage.setItem(RECENT_PAIRS_STORAGE_KEY, "{broken json");
+    expect(loadRecentPairs()).toEqual([]);
+
+    const storageSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("Storage blocked");
+      });
+    expect(loadRecentPairs()).toEqual([]);
+    storageSpy.mockRestore();
   });
 });

@@ -23,6 +23,7 @@ import { applyPolarizationAlphaMask, applyWelchAlphaMask } from "../../utils/mas
 import { gamma2Crit, pCrit } from "../../utils/thresholds";
 import { SpectrogramPanel } from "../CrossSpectralPanel/SpectrogramPanel";
 import { WelchCrossPanel } from "../CrossSpectralPanel/WelchCrossPanel";
+import { ControlSidebar } from "../Layout/ControlSidebar";
 import { DraftNullableNumberInput } from "../Layout/DraftNumberInput";
 import { MagnetogramPanel } from "../SyncedCharts/MagnetogramPanel";
 import { SpaceWeatherPanel } from "../SyncedCharts/SpaceWeatherPanel";
@@ -859,5 +860,235 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     dlSpy.mockRestore();
     ctxSpy.mockRestore();
     dataUrlSpy.mockRestore();
+  });
+
+  it("renders ControlSidebar Recent Pairs only when non-empty and dispatches recordRecent=false on chip click", () => {
+    const emptyCtx = makeBaseContext({
+      state: { ...INITIAL_ANALYSIS_STATE, recentPairs: [] },
+    });
+    act(() => {
+      root.render(
+        <AnalysisContext.Provider value={emptyCtx}>
+          <ControlSidebar />
+        </AnalysisContext.Provider>,
+      );
+    });
+    expect(host.querySelector('[data-testid="recent-pairs-block"]')).toBeNull();
+    expect(host.textContent).not.toContain("HRN–LVV");
+    expect(host.textContent).not.toContain("LVV–OTT");
+
+    const dispatch = vi.fn();
+    const populatedCtx = makeBaseContext({
+      dispatch,
+      state: {
+        ...INITIAL_ANALYSIS_STATE,
+        stationA: "LVV",
+        stationB: "BEL",
+        recentPairs: [
+          { a: "HRN", b: "LVV" },
+          { a: "BEL", b: "LVV" },
+        ],
+      },
+    });
+    act(() => {
+      root.render(
+        <AnalysisContext.Provider value={populatedCtx}>
+          <ControlSidebar />
+        </AnalysisContext.Provider>,
+      );
+    });
+
+    const recentBlock = host.querySelector('[data-testid="recent-pairs-block"]');
+    expect(recentBlock).not.toBeNull();
+    const chips = Array.from(recentBlock!.querySelectorAll("button"));
+    expect(chips.map((c) => c.textContent)).toEqual(["HRN–LVV", "BEL–LVV"]);
+    expect(chips[0].className).not.toContain("active");
+    expect(chips[1].className).toContain("active");
+
+    act(() => {
+      chips[0].click();
+    });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "SET_PAIR",
+      stationA: "HRN",
+      stationB: "LVV",
+      recordRecent: false,
+    });
+  });
+
+  it("auto-recomputes FLR reactively on cursor window/tab changes without refetching within same window or on alpha change", async () => {
+    const healthResp: HealthResponse = {
+      status: "ok",
+      core_version: "0.1.0",
+      catalog_stations: 2,
+      catalog_episodes: 1,
+      require_auth: false,
+    };
+    const catResp: CatalogResponse = {
+      episodes: [
+        {
+          episode_id: "storm_20261009_11",
+          label: "Oct 9-11",
+          start_utc: "2026-10-09T00:00:00Z",
+          end_utc: "2026-10-11T23:59:00Z",
+          n_minutes: 4320,
+          n_days: 3,
+          omni_available: true,
+          oulu_baseline_cpm: 6000,
+        },
+      ],
+      stations: [],
+      availability: [],
+      metadata: {},
+    };
+
+    const flrWindows: number[] = [];
+    let pendingFlrResolve: ((res: Response) => void) | null = null;
+
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/auth/session")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ authenticated: true, session_token: "t", require_auth: false }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url.includes("/api/health")) {
+        return Promise.resolve(new Response(JSON.stringify(healthResp), { status: 200 }));
+      }
+      if (url.includes("/api/catalog")) {
+        return Promise.resolve(new Response(JSON.stringify(catResp), { status: 200 }));
+      }
+      if (url.includes("/api/jobs") && !url.includes("/result")) {
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+      }
+      if (url.includes("/api/cache")) {
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+      }
+      if (url.includes("/api/timeseries/space-weather")) {
+        return Promise.resolve(new Response(JSON.stringify(sampleSpaceWeather()), { status: 200 }));
+      }
+      if (url.includes("/api/timeseries/geomag")) {
+        return Promise.resolve(new Response(JSON.stringify(sampleGeomag(true)), { status: 200 }));
+      }
+      if (url.includes("/api/polarization")) {
+        return Promise.resolve(new Response(JSON.stringify(samplePolarization()), { status: 200 }));
+      }
+      if (url.includes("/api/cross/welch/pair")) {
+        return Promise.resolve(new Response(JSON.stringify(sampleWelchPair()), { status: 200 }));
+      }
+      if (url.includes("/api/cross/welch/flr")) {
+        const body = init?.body ? (JSON.parse(String(init.body)) as { window_index: number }) : { window_index: 0 };
+        flrWindows.push(body.window_index);
+        const makeResp = (winIdx: number) =>
+          new Response(
+            JSON.stringify({
+              episode_id: "storm_20261009_11",
+              band: "Pc5",
+              window_timestamp_utc: `2026-10-10T0${winIdx % 10}:00:00Z`,
+              station_codes: ["LVV", "BEL"],
+              latitudes_deg: [49.9, 51.84],
+              band_power: [10, 12],
+              amplitude: [3.1, 3.4],
+              pair_coherence: [0.5],
+              pair_gamma2_crit: [0.06],
+              pair_phase_deg: [-15],
+              pair_is_significant: [true],
+              cumulative_phase_deg: [0, 15],
+              phase_gradient_deg_per_lat: [7.7],
+              peak_station: winIdx >= 70 ? "LVV" : "BEL",
+              peak_latitude_deg: 51.84,
+            }),
+            { status: 200 },
+          );
+        if (flrWindows.length === 2) {
+          return new Promise<Response>((resolve) => {
+            pendingFlrResolve = () => resolve(makeResp(body.window_index));
+          });
+        }
+        return Promise.resolve(makeResp(body.window_index));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let setCursorFn!: (ms: number | null) => void;
+    let ctxRef!: AnalysisContextValue;
+    const Harness: React.FC = () => {
+      ctxRef = useAnalysis();
+      const { setCursorUtcMs } = useCursor();
+      setCursorFn = setCursorUtcMs;
+      return ctxRef.state.activeDeckTab === "welch" ? <WelchCrossPanel /> : null;
+    };
+
+    await act(async () => {
+      root.render(
+        <AnalysisProvider>
+          <Harness />
+        </AnalysisProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 270));
+    });
+
+    // Not needed on default 'stokes' tab -> 0 FLR calls
+    expect(flrWindows).toEqual([]);
+
+    // Switch to 'welch' tab -> auto-triggers FLR after debounce
+    act(() => {
+      ctxRef.dispatch({ type: "SET_ACTIVE_DECK_TAB", tab: "welch" });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 260));
+    });
+    expect(flrWindows).toHaveLength(1);
+    const firstWin = flrWindows[0];
+    expect(host.textContent).toContain(`2026-10-10T0${firstWin % 10}:00:00Z`);
+    expect(host.textContent).not.toContain("Compute FLR at Cursor");
+
+    // Moving cursor +2 min (same 30-min windowIndex) and changing alpha -> ZERO extra FLR calls
+    act(() => {
+      setCursorFn((ctxRef.state.cursorUtcMs ?? Date.UTC(2026, 9, 10, 12, 0)) + 2 * 60_000);
+      ctxRef.dispatch({ type: "SET_ALPHA", alpha: 0.01 });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 260));
+    });
+    expect(flrWindows).toHaveLength(1);
+
+    // Moving cursor +60 min (different windowIndex) -> triggers 2nd FLR request, keeps old chart visible with Updating…
+    act(() => {
+      setCursorFn((ctxRef.state.cursorUtcMs ?? Date.UTC(2026, 9, 10, 12, 0)) + 60 * 60_000);
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 250));
+    });
+    expect(flrWindows).toHaveLength(2);
+    expect(flrWindows[1]).not.toBe(firstWin);
+    expect(host.querySelector('[data-testid="flr-updating-pill"]')).not.toBeNull();
+    // Old window remains rendered without flashing empty state
+    expect(host.textContent).toContain(`2026-10-10T0${firstWin % 10}:00:00Z`);
+
+    await act(async () => {
+      pendingFlrResolve?.(new Response("{}", { status: 200 }));
+    });
+    expect(host.querySelector('[data-testid="flr-updating-pill"]')).toBeNull();
+    expect(host.textContent).toContain(`2026-10-10T0${flrWindows[1] % 10}:00:00Z`);
+
+    // Switch back to stokes, then activate map FLR Chain mode -> triggers FLR for new band
+    act(() => {
+      ctxRef.dispatch({ type: "SET_ACTIVE_DECK_TAB", tab: "stokes" });
+      ctxRef.dispatch({ type: "SET_BAND", band: "Pc6" });
+      ctxRef.setMapFlrChainActive?.(true);
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 260));
+    });
+    expect(flrWindows).toHaveLength(3);
+
+    vi.unstubAllGlobals();
   });
 });

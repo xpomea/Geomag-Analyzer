@@ -129,6 +129,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
     flrError,
     loadFlrAtCursor,
     loadingFlr,
+    setMapFlrChainActive,
   } = useAnalysis();
 
   const [internalCollapsed, setInternalCollapsed] = useState(false);
@@ -146,6 +147,12 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
   const [projectionType, setProjectionType] = useState<MapProjectionType>("lcc");
   const [interactionMode, setInteractionMode] = useState<"pair" | "chain">("pair");
   const [pendingStart, setPendingStart] = useState<string | null>(null);
+
+  const isMapFlrChainActive = interactionMode === "chain" && !collapsed;
+  useEffect(() => {
+    setMapFlrChainActive?.(isMapFlrChainActive);
+    return () => setMapFlrChainActive?.(false);
+  }, [setMapFlrChainActive, isMapFlrChainActive]);
 
   const [layersOpen, setLayersOpen] = useState(false);
   const layersWrapRef = useRef<HTMLDivElement | null>(null);
@@ -722,7 +729,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
 
     if (pendingStart === null) {
       setPendingStart(code);
-      dispatch({ type: "SET_STATION_A", stationIaga: code });
+      dispatch({ type: "SET_STATION_A", stationIaga: code, recordRecent: false });
       return;
     }
 
@@ -943,7 +950,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
               {formatUtcShort(Date.parse(snapshotWindow.endIso))}
             </span>
           )}
-          {(loadingSnapshot || loadingPair || loadingMatrix) && (
+          {(loadingSnapshot || loadingPair || loadingMatrix || loadingFlr) && (
             <span className="pill">Updating…</span>
           )}
         </div>
@@ -1059,15 +1066,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
                 >
                   <GitBranch size={12} />
                   <span>HRN..PEG</span>
-                </button>
-                <button
-                  type="button"
-                  data-testid="map-compute-flr"
-                  className="btn btn-sm btn-primary"
-                  disabled={loadingFlr}
-                  onClick={() => void loadFlrAtCursor(matrixWindowIndex)}
-                >
-                  {loadingFlr ? "FLR…" : "Compute FLR"}
                 </button>
               </div>
             )}
@@ -1200,7 +1198,16 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
 
           {flrError && (
             <div className="banner banner-danger" data-testid="map-flr-error" style={{ padding: "4px 10px" }}>
-              FLR: {flrError}
+              <span>FLR: {flrError}</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ marginLeft: "auto" }}
+                disabled={loadingFlr}
+                onClick={() => void loadFlrAtCursor(matrixWindowIndex)}
+              >
+                Retry
+              </button>
             </div>
           )}
 

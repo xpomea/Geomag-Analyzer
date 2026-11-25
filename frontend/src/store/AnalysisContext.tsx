@@ -54,7 +54,8 @@ import {
   type MaskedPolarizationView,
   type MaskedWelchView,
 } from "../utils/masking";
-import { CursorProvider } from "./CursorContext";
+import { CursorProvider, useCursor } from "./CursorContext";
+import { loadRecentPairs, saveRecentPairs } from "../utils/recentPairs";
 import {
   INITIAL_ANALYSIS_STATE,
   analysisReducer,
@@ -112,13 +113,127 @@ export interface AnalysisContextValue {
   cancelWtcJob: (jobId: string) => Promise<void>;
   openWtcJobResult: (jobId: string, stride?: number) => Promise<void>;
   loadFlrAtCursor: (windowIndexOverride?: number) => Promise<void>;
+  setMapFlrChainActive?: (active: boolean) => void;
   triggerShutdown: () => Promise<void>;
 }
+
+function buildFlrRequestSignature(state: AnalysisState, windowIndex: number): string {
+  return JSON.stringify([
+    state.episodeId,
+    state.meridionalChain,
+    state.crossComponent,
+    state.coordFrame,
+    state.band,
+    state.tMaxPc6Sec,
+    state.L,
+    state.M,
+    state.windowSamples,
+    state.stepSamples,
+    state.spectrumType,
+    windowIndex,
+  ]);
+}
+
+const FlrAutoSync: React.FC<{
+  isNeeded: boolean;
+  ready: boolean;
+  episodeBoundsMs: [number, number] | null;
+  state: AnalysisState;
+  lastFetchedSigRef: React.MutableRefObject<string | null>;
+  lastFailedSigRef: React.MutableRefObject<string | null>;
+  executeFlrFetch: (windowIndexOverride?: number, autoSig?: string) => Promise<void>;
+  abortAutoFlr: () => void;
+}> = ({
+  isNeeded,
+  ready,
+  episodeBoundsMs,
+  state,
+  lastFetchedSigRef,
+  lastFailedSigRef,
+  executeFlrFetch,
+  abortAutoFlr,
+}) => {
+  const { cursorUtcMs } = useCursor();
+
+  const effectiveCursorMs = useMemo(() => {
+    if (cursorUtcMs !== null && Number.isFinite(cursorUtcMs)) return cursorUtcMs;
+    if (state.cursorUtcMs !== null && Number.isFinite(state.cursorUtcMs)) return state.cursorUtcMs;
+    if (episodeBoundsMs) return Math.round(0.5 * (episodeBoundsMs[0] + episodeBoundsMs[1]));
+    return null;
+  }, [cursorUtcMs, state.cursorUtcMs, episodeBoundsMs]);
+
+  const windowIndex = useMemo(
+    () =>
+      computeCursorWindowIndex(
+        effectiveCursorMs,
+        episodeBoundsMs,
+        state.windowSamples,
+        state.stepSamples,
+      ),
+    [effectiveCursorMs, episodeBoundsMs, state.windowSamples, state.stepSamples],
+  );
+
+  const requestSig = useMemo(() => {
+    if (!ready || !isNeeded || !episodeBoundsMs || state.meridionalChain.length < 2) {
+      return null;
+    }
+    return buildFlrRequestSignature(state, windowIndex);
+  }, [
+    ready,
+    isNeeded,
+    episodeBoundsMs,
+    state.episodeId,
+    state.meridionalChain,
+    state.crossComponent,
+    state.coordFrame,
+    state.band,
+    state.tMaxPc6Sec,
+    state.L,
+    state.M,
+    state.windowSamples,
+    state.stepSamples,
+    state.spectrumType,
+    windowIndex,
+  ]);
+
+  useEffect(() => {
+    if (!requestSig) return;
+    if (
+      lastFetchedSigRef.current === requestSig ||
+      lastFailedSigRef.current === requestSig
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void executeFlrFetch(windowIndex, requestSig);
+    }, 220);
+
+    return () => {
+      clearTimeout(timer);
+      abortAutoFlr();
+    };
+  }, [requestSig, windowIndex, executeFlrFetch, abortAutoFlr, lastFetchedSigRef, lastFailedSigRef]);
+
+  return null;
+};
 
 export const AnalysisContext = createContext<AnalysisContextValue | null>(null);
 
 export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [state, dispatch] = useReducer(analysisReducer, INITIAL_ANALYSIS_STATE);
+  const [state, dispatch] = useReducer(
+    analysisReducer,
+    INITIAL_ANALYSIS_STATE,
+    (init) => ({ ...init, recentPairs: loadRecentPairs() }),
+  );
+  const didMountRecentRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRecentRef.current) {
+      didMountRecentRef.current = true;
+      return;
+    }
+    saveRecentPairs(state.recentPairs);
+  }, [state.recentPairs]);
 
   const [auth, setAuth] = useState<AuthStatusState>({
     checked: false,
@@ -143,6 +258,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [loadingWelch, setLoadingWelch] = useState(false);
   const [loadingFlr, setLoadingFlr] = useState(false);
   const [loadingWtcResult, setLoadingWtcResult] = useState(false);
+  const [mapFlrChainActive, setMapFlrChainActive] = useState(false);
 
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [polarizationError, setPolarizationError] = useState<string | null>(null);
@@ -156,6 +272,9 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   jobsRef.current = state.jobs;
   const wtcAbortRef = useRef<AbortController | null>(null);
   const flrAbortRef = useRef<AbortController | null>(null);
+  const flrAutoInFlightRef = useRef(false);
+  const lastFetchedFlrSigRef = useRef<string | null>(null);
+  const lastFailedFlrSigRef = useRef<string | null>(null);
 
   const refreshJobsAndCache = useCallback(async () => {
     try {
@@ -636,19 +755,17 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   useEffect(() => {
     setFlrProfileRaw(null);
-  }, [
-    state.episodeId,
-    state.band,
-    state.tMaxPc6Sec,
-    state.coordFrame,
-    state.crossComponent,
-    state.spectrumType,
-    state.L,
-    state.M,
-    state.windowSamples,
-    state.stepSamples,
-    state.meridionalChain,
-  ]);
+    setFlrError(null);
+    lastFetchedFlrSigRef.current = null;
+    lastFailedFlrSigRef.current = null;
+  }, [state.episodeId]);
+
+  useEffect(() => {
+    if (state.meridionalChain.length < 2) {
+      setFlrProfileRaw(null);
+      lastFetchedFlrSigRef.current = null;
+    }
+  }, [state.meridionalChain]);
 
   const flrProfile = useMemo<MeridionalFLRResponse | null>(() => {
     if (!flrProfileRaw) return null;
@@ -813,26 +930,59 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  const loadFlrAtCursor = useCallback(
-    async (windowIndexOverride?: number) => {
+  const abortAutoFlr = useCallback(() => {
+    if (flrAutoInFlightRef.current && flrAbortRef.current) {
+      flrAbortRef.current.abort();
+      flrAbortRef.current = null;
+      flrAutoInFlightRef.current = false;
+      setLoadingFlr(false);
+    }
+  }, []);
+
+  const flrFetchContextRef = useRef({
+    state,
+    episodeBoundsMs,
+    welchPairRaw,
+    welchPairSig,
+    currentWelchSig,
+  });
+  flrFetchContextRef.current = {
+    state,
+    episodeBoundsMs,
+    welchPairRaw,
+    welchPairSig,
+    currentWelchSig,
+  };
+
+  const executeFlrFetch = useCallback(
+    async (windowIndexOverride?: number, autoSig?: string) => {
+      const {
+        state: curState,
+        episodeBoundsMs: curBounds,
+        welchPairRaw: curWelchRaw,
+        welchPairSig: curWelchRawSig,
+        currentWelchSig: curWelchSig,
+      } = flrFetchContextRef.current;
+
       flrAbortRef.current?.abort();
       const ctrl = new AbortController();
       flrAbortRef.current = ctrl;
+      flrAutoInFlightRef.current = autoSig !== undefined;
 
       setLoadingFlr(true);
       setFlrError(null);
       let winIdx = windowIndexOverride ?? 0;
       if (windowIndexOverride === undefined) {
-        const targetMs = cursorRef.current ?? state.cursorUtcMs;
+        const targetMs = cursorRef.current ?? curState.cursorUtcMs;
         if (
-          welchPairRaw &&
-          welchPairRaw.window_timestamps_utc.length > 0 &&
-          welchPairSig === currentWelchSig
+          curWelchRaw &&
+          curWelchRaw.window_timestamps_utc.length > 0 &&
+          curWelchRawSig === curWelchSig
         ) {
-          const refMs = targetMs ?? Date.parse(welchPairRaw.window_timestamps_utc[0]);
+          const refMs = targetMs ?? Date.parse(curWelchRaw.window_timestamps_utc[0]);
           let bestIdx = 0;
           let bestDiff = Number.POSITIVE_INFINITY;
-          welchPairRaw.window_timestamps_utc.forEach((iso, idx) => {
+          curWelchRaw.window_timestamps_utc.forEach((iso, idx) => {
             const diff = Math.abs(Date.parse(iso) - refMs);
             if (diff < bestDiff) {
               bestDiff = diff;
@@ -843,34 +993,38 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } else {
           winIdx = computeCursorWindowIndex(
             targetMs,
-            episodeBoundsMs,
-            state.windowSamples,
-            state.stepSamples,
+            curBounds,
+            curState.windowSamples,
+            curState.stepSamples,
           );
         }
       }
 
+      const resolvedSig = autoSig ?? buildFlrRequestSignature(curState, winIdx);
+
       try {
         const res = await computeWelchFlr(
           {
-            episode_id: state.episodeId,
-            station_chain: state.meridionalChain,
-            component: state.crossComponent,
-            coord_frame: state.coordFrame,
-            band: state.band,
-            t_max_pc6_sec: state.tMaxPc6Sec,
-            L: state.L,
-            M: state.M,
-            window_samples: state.windowSamples,
-            step_samples: state.stepSamples,
+            episode_id: curState.episodeId,
+            station_chain: curState.meridionalChain,
+            component: curState.crossComponent,
+            coord_frame: curState.coordFrame,
+            band: curState.band,
+            t_max_pc6_sec: curState.tMaxPc6Sec,
+            L: curState.L,
+            M: curState.M,
+            window_samples: curState.windowSamples,
+            step_samples: curState.stepSamples,
             window_index: winIdx,
             alpha: 0.05,
-            spectrum_type: state.spectrumType,
+            spectrum_type: curState.spectrumType,
           },
           ctrl.signal,
         );
         if (!ctrl.signal.aborted) {
           setFlrProfileRaw(res);
+          lastFetchedFlrSigRef.current = resolvedSig;
+          lastFailedFlrSigRef.current = null;
         }
       } catch (err) {
         if ((err as Error).name === "AbortError" || ctrl.signal.aborted) {
@@ -878,30 +1032,24 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
         setFlrProfileRaw(null);
         setFlrError(err instanceof ApiError ? err.detail : (err as Error).message);
+        lastFetchedFlrSigRef.current = null;
+        lastFailedFlrSigRef.current = resolvedSig;
       } finally {
         if (flrAbortRef.current === ctrl) {
+          flrAbortRef.current = null;
+          flrAutoInFlightRef.current = false;
           setLoadingFlr(false);
         }
       }
     },
-    [
-      welchPairRaw,
-      welchPairSig,
-      currentWelchSig,
-      episodeBoundsMs,
-      state.cursorUtcMs,
-      state.episodeId,
-      state.meridionalChain,
-      state.crossComponent,
-      state.coordFrame,
-      state.band,
-      state.tMaxPc6Sec,
-      state.L,
-      state.M,
-      state.windowSamples,
-      state.stepSamples,
-      state.spectrumType,
-    ],
+    [],
+  );
+
+  const loadFlrAtCursor = useCallback(
+    async (windowIndexOverride?: number) => {
+      await executeFlrFetch(windowIndexOverride);
+    },
+    [executeFlrFetch],
   );
 
   const triggerShutdown = useCallback(async () => {
@@ -954,6 +1102,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       cancelWtcJob,
       openWtcJobResult,
       loadFlrAtCursor,
+      setMapFlrChainActive,
       triggerShutdown,
     }),
     [
@@ -997,9 +1146,22 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     ],
   );
 
+  const isFlrAutoNeeded = state.activeDeckTab === "welch" || mapFlrChainActive;
+  const isFlrReady = auth.checked && auth.authenticated && Boolean(catalog);
+
   return (
     <AnalysisContext.Provider value={value}>
       <CursorProvider resetValue={state.cursorUtcMs} cursorRef={cursorRef}>
+        <FlrAutoSync
+          isNeeded={isFlrAutoNeeded}
+          ready={isFlrReady}
+          episodeBoundsMs={episodeBoundsMs}
+          state={state}
+          lastFetchedSigRef={lastFetchedFlrSigRef}
+          lastFailedSigRef={lastFailedFlrSigRef}
+          executeFlrFetch={executeFlrFetch}
+          abortAutoFlr={abortAutoFlr}
+        />
         {children}
       </CursorProvider>
     </AnalysisContext.Provider>

@@ -307,7 +307,11 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     act(() => {
       lvvEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(dispatch).toHaveBeenCalledWith({ type: "SET_STATION_A", stationIaga: "LVV" });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "SET_STATION_A",
+      stationIaga: "LVV",
+      recordRecent: false,
+    });
 
     act(() => {
       ottEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -536,7 +540,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     expect(host.innerHTML).not.toContain("γ²=0.74");
   });
 
-  it("passes cursor window_index when clicking FLR compute and renders flrError banner (F-04)", async () => {
+  it("removes manual Compute FLR button, renders Updating status, and supports Retry with cursor window_index on flrError (F-04)", async () => {
     const catalog = build49Catalog();
     const snapshot = buildSnapshotResponse();
     vi.stubGlobal(
@@ -584,6 +588,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     );
 
     const loadFlrAtCursor = vi.fn().mockResolvedValue(undefined);
+    const setMapFlrChainActive = vi.fn();
     const cursorMs = Date.UTC(2026, 9, 10, 12, 0, 0);
     const expectedIdx = computeCursorWindowIndex(
       cursorMs,
@@ -598,7 +603,9 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
       welchPairSig: null,
       maskedWelch: null,
       flrError: "Station HRN unavailable",
+      loadingFlr: true,
       loadFlrAtCursor,
+      setMapFlrChainActive,
       state: {
         ...INITIAL_ANALYSIS_STATE,
         activeCrossTab: "spectrogram",
@@ -614,6 +621,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
       );
     });
 
+    expect(host.textContent).toContain("Updating…");
     const errBanner = host.querySelector('[data-testid="map-flr-error"]');
     expect(errBanner).not.toBeNull();
     expect(errBanner?.textContent).toContain("Station HRN unavailable");
@@ -631,12 +639,29 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
       await new Promise((r) => setTimeout(r, 40));
     });
 
+    expect(setMapFlrChainActive).toHaveBeenCalledWith(true);
     const flrBtn = Array.from(host.querySelectorAll("button")).find((b) =>
       b.textContent?.includes("Compute FLR"),
     );
-    expect(flrBtn).toBeDefined();
+    expect(flrBtn).toBeUndefined();
+
+    const retryBtn = Array.from(errBanner?.querySelectorAll("button") ?? []).find(
+      (b) => b.textContent?.trim() === "Retry",
+    );
+    expect(retryBtn).toBeDefined();
+    // Re-render with loadingFlr: false so Retry button is enabled
     await act(async () => {
-      (flrBtn as HTMLButtonElement).click();
+      root.render(
+        <AnalysisContext.Provider value={{ ...ctx, loadingFlr: false }}>
+          <StationMapPanel />
+        </AnalysisContext.Provider>,
+      );
+    });
+    const enabledRetry = Array.from(
+      host.querySelector('[data-testid="map-flr-error"]')?.querySelectorAll("button") ?? [],
+    ).find((b) => b.textContent?.trim() === "Retry") as HTMLButtonElement;
+    await act(async () => {
+      enabledRetry.click();
     });
 
     expect(loadFlrAtCursor).toHaveBeenCalledWith(expectedIdx);

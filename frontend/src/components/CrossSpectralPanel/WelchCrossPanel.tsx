@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 import { ArrowLeftRight, GitBranch, RadioReceiver } from "lucide-react";
 import type { CrossComponent } from "../../api/types";
@@ -271,18 +271,25 @@ export const WelchCrossPanel: React.FC = () => {
     };
   }, [flrProfile]);
 
+  const flrChartRef = useRef<echarts.ECharts | null>(null);
   const [flrHostEl, setFlrHostEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!flrHostEl || !flrOption) return;
+    if (!flrHostEl) return;
     const chart = echarts.init(flrHostEl);
+    flrChartRef.current = chart;
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(flrHostEl);
-    chart.setOption(flrOption);
 
     return () => {
       ro.disconnect();
       chart.dispose();
+      flrChartRef.current = null;
     };
+  }, [flrHostEl]);
+
+  useEffect(() => {
+    if (!flrChartRef.current || !flrOption) return;
+    flrChartRef.current.setOption(flrOption, { notMerge: true, lazyUpdate: false });
   }, [flrHostEl, flrOption]);
 
   const bandGuides = useMemo<BandGuide[]>(
@@ -589,21 +596,31 @@ export const WelchCrossPanel: React.FC = () => {
                 <GitBranch size={14} color="var(--accent-primary)" />
                 <span style={{ fontWeight: 600, fontSize: 12 }}>Meridional FLR Profile</span>
               </div>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={loadingFlr}
-                onClick={() => void loadFlrAtCursor()}
-              >
-                {loadingFlr ? "Computing FLR…" : "Compute FLR at Cursor"}
-              </button>
+              {loadingFlr && (
+                <span className="pill" data-testid="flr-updating-pill">
+                  Updating…
+                </span>
+              )}
             </div>
 
             <div className="hint-text mono" style={{ flexShrink: 0 }}>
               Chain: {state.meridionalChain.join(" → ")}
             </div>
 
-            {flrError && <div className="banner banner-danger">{flrError}</div>}
+            {flrError && (
+              <div className="banner banner-danger" data-testid="welch-flr-error">
+                <span>{flrError}</span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ marginLeft: "auto" }}
+                  disabled={loadingFlr}
+                  onClick={() => void loadFlrAtCursor()}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
 
             {flrProfile ? (
               <>
@@ -640,8 +657,9 @@ export const WelchCrossPanel: React.FC = () => {
               </>
             ) : (
               <div className="empty-note" style={{ margin: "auto" }}>
-                Click &ldquo;Compute FLR at Cursor&rdquo; to evaluate band amplitude and cumulative
-                phase gradient along the meridional chain.
+                {loadingFlr
+                  ? "Evaluating meridional FLR profile at cursor…"
+                  : "Meridional FLR profile unavailable for current selection."}
               </div>
             )}
           </div>

@@ -347,6 +347,19 @@ input[type="range"] {
   gap: 4px;
 }
 
+.recent-pairs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.recent-pairs-grid .chip-btn {
+  padding: 2px 4px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chip-btn {
   padding: 2px 7px;
   font-size: 11px;

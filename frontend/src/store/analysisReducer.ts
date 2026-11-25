@@ -12,6 +12,8 @@ import type {
   StationInfo,
 } from "../api/types";
 
+import { recordRecentPair, type RecentPair } from "../utils/recentPairs";
+
 export const DEFAULT_MERIDIONAL_CHAIN = [
   "HRN",
   "ABK",
@@ -43,6 +45,7 @@ export interface AnalysisState {
   episodeId: string;
   stationA: string;
   stationB: string;
+  recentPairs: RecentPair[];
   meridionalChain: string[];
 
   band: BandType;
@@ -91,6 +94,7 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
   episodeId: "storm_20261009_11",
   stationA: "LVV",
   stationB: "BEL",
+  recentPairs: [],
   meridionalChain: DEFAULT_MERIDIONAL_CHAIN,
 
   band: "Pc5",
@@ -136,9 +140,9 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
 
 export type AnalysisAction =
   | { type: "SET_EPISODE"; episodeId: string; episode?: EpisodeInfo | null }
-  | { type: "SET_STATION_A"; stationIaga: string }
-  | { type: "SET_STATION_B"; stationIaga: string }
-  | { type: "SET_PAIR"; stationA: string; stationB: string }
+  | { type: "SET_STATION_A"; stationIaga: string; recordRecent?: boolean }
+  | { type: "SET_STATION_B"; stationIaga: string; recordRecent?: boolean }
+  | { type: "SET_PAIR"; stationA: string; stationB: string; recordRecent?: boolean }
   | { type: "SET_MERIDIONAL_CHAIN"; chain: string[] }
   | { type: "SET_BAND"; band: BandType }
   | { type: "SET_T_MAX_PC6"; sec: number }
@@ -255,18 +259,43 @@ export function analysisReducer(
       };
     }
 
-    case "SET_STATION_A":
-      return { ...state, stationA: action.stationIaga.toUpperCase() };
-
-    case "SET_STATION_B":
-      return { ...state, stationB: action.stationIaga.toUpperCase() };
-
-    case "SET_PAIR":
+    case "SET_STATION_A": {
+      const nextA = action.stationIaga.toUpperCase();
       return {
         ...state,
-        stationA: action.stationA.toUpperCase(),
-        stationB: action.stationB.toUpperCase(),
+        stationA: nextA,
+        recentPairs:
+          action.recordRecent === false
+            ? state.recentPairs
+            : recordRecentPair(state.recentPairs, nextA, state.stationB),
       };
+    }
+
+    case "SET_STATION_B": {
+      const nextB = action.stationIaga.toUpperCase();
+      return {
+        ...state,
+        stationB: nextB,
+        recentPairs:
+          action.recordRecent === false
+            ? state.recentPairs
+            : recordRecentPair(state.recentPairs, state.stationA, nextB),
+      };
+    }
+
+    case "SET_PAIR": {
+      const nextA = action.stationA.toUpperCase();
+      const nextB = action.stationB.toUpperCase();
+      return {
+        ...state,
+        stationA: nextA,
+        stationB: nextB,
+        recentPairs:
+          action.recordRecent === false
+            ? state.recentPairs
+            : recordRecentPair(state.recentPairs, nextA, nextB),
+      };
+    }
 
     case "SET_MERIDIONAL_CHAIN":
       return { ...state, meridionalChain: action.chain };
@@ -388,6 +417,8 @@ export function analysisReducer(
 
     case "OPEN_WTC_JOB": {
       const switchedEpisode = action.episodeId !== state.episodeId;
+      const nextA = action.stationA.toUpperCase();
+      const nextB = action.stationB.toUpperCase();
       const nextRange =
         action.boundsMs ?? (switchedEpisode ? null : state.viewRangeMs);
       const nextCursor =
@@ -399,8 +430,9 @@ export function analysisReducer(
       return {
         ...state,
         episodeId: action.episodeId,
-        stationA: action.stationA.toUpperCase(),
-        stationB: action.stationB.toUpperCase(),
+        stationA: nextA,
+        stationB: nextB,
+        recentPairs: recordRecentPair(state.recentPairs, nextA, nextB),
         coordFrame: action.coordFrame,
         crossComponent: harmonizeCrossComponent(action.component, action.coordFrame),
         externalD0Deg:

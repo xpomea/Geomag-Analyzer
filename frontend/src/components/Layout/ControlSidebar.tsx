@@ -17,13 +17,8 @@ import type {
   SpectrumType,
 } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
+import { isSameUnorderedPair } from "../../utils/recentPairs";
 import { DraftNullableNumberInput, DraftNumberInput } from "./DraftNumberInput";
-
-const QUICK_PAIRS: { label: string; a: string; b: string }[] = [
-  { label: "LVV–BEL", a: "LVV", b: "BEL" },
-  { label: "HRN–LVV", a: "HRN", b: "LVV" },
-  { label: "LVV–OTT", a: "LVV", b: "OTT" },
-];
 
 const METHOD_SHORT_LABELS: Record<PolarizationMethod, string> = {
   welch: "Welch",
@@ -135,18 +130,36 @@ export const ControlSidebar: React.FC = React.memo(() => {
           </select>
         </label>
 
-        <div className="quick-chips">
-          {QUICK_PAIRS.map((p) => (
-            <button
-              key={p.label}
-              type="button"
-              className={`chip-btn ${state.stationA === p.a && state.stationB === p.b ? "active" : ""}`}
-              onClick={() => dispatch({ type: "SET_PAIR", stationA: p.a, stationB: p.b })}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        {state.recentPairs.length > 0 && (
+          <div className="field-label" data-testid="recent-pairs-block">
+            <span>Recent pairs</span>
+            <div className="recent-pairs-grid">
+              {state.recentPairs.map((p) => {
+                const isActive = isSameUnorderedPair(p, {
+                  a: state.stationA,
+                  b: state.stationB,
+                });
+                return (
+                  <button
+                    key={`${p.a}-${p.b}`}
+                    type="button"
+                    className={`chip-btn ${isActive ? "active" : ""}`}
+                    onClick={() =>
+                      dispatch({
+                        type: "SET_PAIR",
+                        stationA: p.a,
+                        stationB: p.b,
+                        recordRecent: false,
+                      })
+                    }
+                  >
+                    {p.a}–{p.b}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {(stationAMeta && !stationAMeta.has_baseline) || (stationBMeta && !stationBMeta.has_baseline) ? (
           <div className="hint-text" style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
