@@ -217,6 +217,47 @@ export function createFittedMapProjection({
   return proj;
 }
 
+/**
+ * Proportionally rescale screen pan offset [px] when rendering the same zoomed/panned
+ * map view into a different viewport size (e.g. responsive screen stage -> fixed 960px SVG).
+ */
+export function scalePanOffsetForViewport(
+  pan: { x: number; y: number },
+  params: {
+    projectionType: MapProjectionType;
+    regionPreset: MapRegionPreset;
+    stations?: ReadonlyArray<{ lat_deg: number; lon_deg: number }>;
+    fromWidth: number;
+    fromHeight: number;
+    toWidth: number;
+    toHeight: number;
+  },
+): { x: number; y: number } {
+  if (Math.abs(pan.x) < 1e-9 && Math.abs(pan.y) < 1e-9) return pan;
+  const fw = Math.max(240, params.fromWidth);
+  const fh = Math.max(180, params.fromHeight);
+  const tw = Math.max(240, params.toWidth);
+  const th = Math.max(180, params.toHeight);
+  if (fw === tw && fh === th) return pan;
+
+  const fromBase = createFittedMapProjection({
+    projectionType: params.projectionType,
+    regionPreset: params.regionPreset,
+    width: fw,
+    height: fh,
+    stations: params.stations,
+  });
+  const toBase = createFittedMapProjection({
+    projectionType: params.projectionType,
+    regionPreset: params.regionPreset,
+    width: tw,
+    height: th,
+    stations: params.stations,
+  });
+  const ratio = toBase.scale() / Math.max(1e-9, fromBase.scale());
+  return { x: pan.x * ratio, y: pan.y * ratio };
+}
+
 export function createMapPathGenerator(projection: GeoProjection) {
   return geoPath(projection);
 }

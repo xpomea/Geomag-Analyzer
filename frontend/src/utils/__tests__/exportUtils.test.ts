@@ -13,6 +13,7 @@ import {
   formatCsvWithMetadata,
   injectPngDpiChunk,
   renderEChartsToSvg,
+  sanitizeStandaloneSvg,
 } from "../exportUtils";
 import {
   createFittedMapProjection,
@@ -23,6 +24,7 @@ import { buildStokesEllipseGeometry, computeArcCoherenceMetrics } from "../stoke
 import { ALL_49_STATIONS } from "./fixtures/stations49";
 
 function parseXmlSvg(svg: string): Document {
+  expect(svg).not.toMatch(/(?:fill|stroke)="rgba\(/i);
   const parser = new DOMParser();
   const doc = parser.parseFromString(svg, "image/svg+xml");
   expect(doc.querySelector("parsererror")).toBeNull();
@@ -427,6 +429,47 @@ describe("Publication export subsystem (SVG, PNG 300 DPI, CSV, Windows filenames
       const doc = parseXmlSvg(svg);
       expect(doc.querySelectorAll("ellipse").length).toBeGreaterThan(25);
       expect(doc.querySelectorAll("polygon").length).toBeGreaterThan(20);
+      expect(svg).toContain('fill-opacity="');
+      expect(svg).toContain('stroke-opacity="');
+    }
+  });
+
+  it("emits strictly SVG 1.1 fill-opacity/stroke-opacity without rgba(...) in heatmap/map SVGs and sanitizeStandaloneSvg (F-01)", () => {
+    const rawSvg =
+      '<svg width="100" height="50"><rect x="0" y="0" width="20" height="20" fill="rgba(15, 23, 42, 0.5)" fill-opacity="0.8" stroke="rgba(255, 0, 128, 0.25)"/></svg>';
+    const normalized = sanitizeStandaloneSvg(rawSvg);
+    const doc = parseXmlSvg(normalized);
+    const rect = doc.querySelector("rect[x='0'][width='20']");
+    expect(rect).not.toBeNull();
+    expect(rect?.getAttribute("fill")).toBe("rgb(15,23,42)");
+    expect(rect?.getAttribute("fill-opacity")).toBe("0.4");
+    expect(rect?.getAttribute("stroke")).toBe("rgb(255,0,128)");
+    expect(rect?.getAttribute("stroke-opacity")).toBe("0.25");
+
+    for (const theme of ["light", "dark"] as const) {
+      const heatmapSvg = buildHeatmapPublicationSvg({
+        title: "Dark/Light COI & Guides",
+        theme,
+        timestampsUtc: ["2026-10-10T00:00:00Z", "2026-10-10T01:00:00Z"],
+        yValues: [0.002, 0.005],
+        yLabel: "Frequency [mHz]",
+        yFormat: (y) => (y * 1000).toFixed(2),
+        yScaleMode: "linear",
+        zMatrix: [
+          [1, 2],
+          [3, 4],
+        ],
+        matrixLayout: "time-by-y",
+        colormap: "viridis",
+        viewRangeMs: null,
+        coiPeriods: [0.003, 0.003],
+        bandGuidesY: [{ value: 0.004, label: "Pc5", color: "rgba(56, 189, 248, 0.85)" }],
+      });
+      parseXmlSvg(heatmapSvg);
+      expect(heatmapSvg).toContain('fill-opacity="');
+      if (theme === "dark") {
+        expect(heatmapSvg).toContain('stroke="rgb(56,189,248)" stroke-opacity="0.85"');
+      }
     }
   });
 });

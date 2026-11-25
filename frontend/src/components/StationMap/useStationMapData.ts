@@ -72,7 +72,10 @@ export function useStationMapData(options: {
   } = useAnalysis();
   const { cursorUtcMs } = useCursor();
 
-  const [snapshotRaw, setSnapshotRaw] = useState<NetworkSnapshotResponse | null>(null);
+  const [snapshotState, setSnapshotState] = useState<{
+    paramSig: string;
+    data: NetworkSnapshotResponse;
+  } | null>(null);
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
@@ -82,7 +85,10 @@ export function useStationMapData(options: {
   } | null>(null);
   const [loadingPair, setLoadingPair] = useState(false);
 
-  const [matrixRaw, setMatrixRaw] = useState<WelchMatrixResponse | null>(null);
+  const [matrixState, setMatrixState] = useState<{
+    paramSig: string;
+    data: WelchMatrixResponse;
+  } | null>(null);
   const [loadingMatrix, setLoadingMatrix] = useState(false);
 
   const effectiveCursorMs = useMemo(() => {
@@ -124,15 +130,30 @@ export function useStationMapData(options: {
 
   // 1. Debounced 49-station network snapshot (NOT dependent on alpha!)
   useEffect(() => {
-    if (!auth.checked || !auth.authenticated || !catalog || !snapshotWindow) return;
-    if (catalog.stations.length === 0) return;
+    if (
+      !auth.checked ||
+      !auth.authenticated ||
+      !catalog ||
+      !snapshotWindow ||
+      catalog.stations.length === 0
+    ) {
+      setSnapshotState((prev) =>
+        !snapshotWindow || (prev && prev.paramSig !== snapParamSig) ? null : prev,
+      );
+      setLoadingSnapshot(false);
+      return;
+    }
 
     const sigChanged = lastSnapSigRef.current !== snapParamSig;
-    const delayMs = sigChanged || snapshotRaw === null ? 15 : 220;
+    const delayMs =
+      sigChanged || snapshotState === null || snapshotState.paramSig !== snapParamSig ? 15 : 220;
     const ctrl = new AbortController();
+    const fetchParamSig = snapParamSig;
+
+    setSnapshotState((prev) => (prev && prev.paramSig === snapParamSig ? prev : null));
 
     const timer = setTimeout(() => {
-      lastSnapSigRef.current = snapParamSig;
+      lastSnapSigRef.current = fetchParamSig;
       setLoadingSnapshot(true);
       setSnapshotError(null);
       computeNetworkSnapshot(
@@ -151,10 +172,13 @@ export function useStationMapData(options: {
         ctrl.signal,
       )
         .then((res) => {
-          setSnapshotRaw(res);
+          if (!ctrl.signal.aborted) {
+            setSnapshotState({ paramSig: fetchParamSig, data: res });
+          }
         })
         .catch((err) => {
-          if ((err as Error).name !== "AbortError") {
+          if ((err as Error).name !== "AbortError" && !ctrl.signal.aborted) {
+            setSnapshotState(null);
             setSnapshotError(err instanceof ApiError ? err.detail : (err as Error).message);
           }
         })
@@ -181,9 +205,9 @@ export function useStationMapData(options: {
 
   // Instant client-side alpha re-masking for all 49 stations
   const snapshotMasked = useMemo(() => {
-    if (!snapshotRaw) return null;
-    return applyNetworkSnapshotAlphaMask(snapshotRaw, state.alpha);
-  }, [snapshotRaw, state.alpha]);
+    if (!snapshotState || snapshotState.paramSig !== snapParamSig) return null;
+    return applyNetworkSnapshotAlphaMask(snapshotState.data, state.alpha);
+  }, [snapshotState, snapParamSig, state.alpha]);
 
   // 2. Pair coherence data for active pair A <-> B (reuse AnalysisContext welchPairRaw if matching)
   const currentPairSig = useMemo(
@@ -392,16 +416,49 @@ export function useStationMapData(options: {
     [effectiveCursorMs, episodeBoundsMs, state.windowSamples, state.stepSamples],
   );
 
+  const matrixParamSig = useMemo(
+    () =>
+      JSON.stringify([
+        state.episodeId,
+        state.crossComponent,
+        state.coordFrame,
+        state.band,
+        state.tMaxPc6Sec,
+        state.L,
+        state.M,
+        state.windowSamples,
+        state.stepSamples,
+        state.spectrumType,
+      ]),
+    [
+      state.episodeId,
+      state.crossComponent,
+      state.coordFrame,
+      state.band,
+      state.tMaxPc6Sec,
+      state.L,
+      state.M,
+      state.windowSamples,
+      state.stepSamples,
+      state.spectrumType,
+    ],
+  );
+
   useEffect(() => {
     if (!options.showMatrixArcs || !options.showArcs) {
-      setMatrixRaw(null);
+      setMatrixState(null);
+      setLoadingMatrix(false);
       return;
     }
     if (!auth.checked || !auth.authenticated || !catalog || catalog.stations.length === 0) {
+      setMatrixState((prev) => (prev && prev.paramSig !== matrixParamSig ? null : prev));
       return;
     }
 
     const ctrl = new AbortController();
+    const fetchParamSig = matrixParamSig;
+    setMatrixState((prev) => (prev && prev.paramSig === matrixParamSig ? prev : null));
+
     const timer = setTimeout(() => {
       setLoadingMatrix(true);
       computeWelchMatrix(
@@ -422,11 +479,13 @@ export function useStationMapData(options: {
         ctrl.signal,
       )
         .then((res) => {
-          setMatrixRaw(res);
+          if (!ctrl.signal.aborted) {
+            setMatrixState({ paramSig: fetchParamSig, data: res });
+          }
         })
         .catch(() => {
           if (!ctrl.signal.aborted) {
-            setMatrixRaw(null);
+            setMatrixState(null);
           }
         })
         .finally(() => {
@@ -446,6 +505,7 @@ export function useStationMapData(options: {
     auth.checked,
     auth.authenticated,
     catalog,
+    matrixParamSig,
     state.episodeId,
     state.crossComponent,
     state.coordFrame,
@@ -460,7 +520,15 @@ export function useStationMapData(options: {
   ]);
 
   const matrixArcsFromA = useMemo<MatrixArcEdge[]>(() => {
-    if (!options.showMatrixArcs || !matrixRaw || matrixRaw.gamma2.length === 0) return [];
+    if (
+      !options.showMatrixArcs ||
+      !matrixState ||
+      matrixState.paramSig !== matrixParamSig ||
+      matrixState.data.gamma2.length === 0
+    ) {
+      return [];
+    }
+    const matrixRaw = matrixState.data;
     const idxA = matrixRaw.station_codes.indexOf(state.stationA);
     if (idxA === -1) return [];
     const g2Row = matrixRaw.gamma2[0]?.[idxA];
@@ -491,7 +559,7 @@ export function useStationMapData(options: {
       });
     }
     return edges;
-  }, [options.showMatrixArcs, matrixRaw, state.stationA, state.stationB, state.alpha]);
+  }, [options.showMatrixArcs, matrixState, matrixParamSig, state.stationA, state.stationB, state.alpha]);
 
   return {
     effectiveCursorMs,

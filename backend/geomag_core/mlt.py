@@ -40,11 +40,17 @@ def wrap_lon_180(lon_deg: float) -> float:
 
 
 def _clamp_unit(val: float) -> float:
-    return max(-1.0, min(1.0, float(val)))
+    v = float(val)
+    if math.isnan(v):
+        return float("nan")
+    return max(-1.0, min(1.0, v))
 
 
 def utc_to_unix_ms(utc_timestamp: Any) -> float:
     """Convert ISO str, datetime, pandas.Timestamp, np.datetime64, or Unix s to Unix ms."""
+    if type(utc_timestamp).__name__ == "NaTType":
+        return float("nan")
+
     if isinstance(utc_timestamp, str):
         s = utc_timestamp.strip()
         if s.endswith("Z"):
@@ -65,6 +71,8 @@ def utc_to_unix_ms(utc_timestamp: Any) -> float:
         return dt.timestamp() * 1000.0
 
     if isinstance(utc_timestamp, np.datetime64):
+        if np.isnat(utc_timestamp):
+            return float("nan")
         return float(utc_timestamp.astype("datetime64[ms]").astype(np.int64))
 
     if hasattr(utc_timestamp, "timestamp") and callable(utc_timestamp.timestamp):
@@ -277,7 +285,12 @@ def compute_mlt_array(
     if isinstance(utc_timestamps, np.ndarray) and np.issubdtype(
         utc_timestamps.dtype, np.datetime64
     ):
-        utc_ms = utc_timestamps.astype("datetime64[ms]").astype(np.float64)
+        nat_mask = np.isnat(utc_timestamps)
+        utc_ms = np.where(
+            nat_mask,
+            np.nan,
+            utc_timestamps.astype("datetime64[ms]").astype(np.float64),
+        )
     elif isinstance(utc_timestamps, np.ndarray) and np.issubdtype(
         utc_timestamps.dtype, np.number
     ):
@@ -288,65 +301,71 @@ def compute_mlt_array(
     if utc_ms.size == 0:
         return np.empty(0, dtype=np.float64)
 
-    julian_date = utc_ms / 86_400_000.0 + 2_440_587.5
-    t_cent = (julian_date - 2_451_545.0) / 36_525.0
+    with np.errstate(invalid="ignore"):
+        julian_date = utc_ms / 86_400_000.0 + 2_440_587.5
+        t_cent = (julian_date - 2_451_545.0) / 36_525.0
 
-    l0_deg = (280.46646 + t_cent * (36000.76983 + 0.0003032 * t_cent)) % 360.0
-    m_rad = (357.52911 + t_cent * (35999.05029 - 0.0001537 * t_cent)) * _DEG2RAD
-    ecc = 0.016708634 - t_cent * (0.000042037 + 0.0000001267 * t_cent)
+        l0_deg = (280.46646 + t_cent * (36000.76983 + 0.0003032 * t_cent)) % 360.0
+        m_rad = (357.52911 + t_cent * (35999.05029 - 0.0001537 * t_cent)) * _DEG2RAD
+        ecc = 0.016708634 - t_cent * (0.000042037 + 0.0000001267 * t_cent)
 
-    c_deg = (
-        np.sin(m_rad) * (1.914602 - t_cent * (0.004817 + 0.000014 * t_cent))
-        + np.sin(2.0 * m_rad) * (0.019993 - 0.000101 * t_cent)
-        + np.sin(3.0 * m_rad) * 0.000289
-    )
-
-    omega_rad = (125.04 - 1934.136 * t_cent) * _DEG2RAD
-    lambda_app_deg = (l0_deg + c_deg) - 0.00569 - 0.00478 * np.sin(omega_rad)
-
-    eps0_deg = (
-        23.0
-        + (26.0 + (21.448 - t_cent * (46.815 + t_cent * (0.00059 - t_cent * 0.001813))) / 60.0)
-        / 60.0
-    )
-    eps_rad = (eps0_deg + 0.00256 * np.cos(omega_rad)) * _DEG2RAD
-
-    decl_rad = np.arcsin(np.clip(np.sin(eps_rad) * np.sin(lambda_app_deg * _DEG2RAD), -1.0, 1.0))
-
-    y = np.tan(eps_rad * 0.5) ** 2
-    l0_rad = l0_deg * _DEG2RAD
-    eot_min = (
-        4.0
-        * _RAD2DEG
-        * (
-            y * np.sin(2.0 * l0_rad)
-            - 2.0 * ecc * np.sin(m_rad)
-            + 4.0 * ecc * y * np.sin(m_rad) * np.cos(2.0 * l0_rad)
-            - 0.5 * y * y * np.sin(4.0 * l0_rad)
-            - 1.25 * ecc * ecc * np.sin(2.0 * m_rad)
+        c_deg = (
+            np.sin(m_rad) * (1.914602 - t_cent * (0.004817 + 0.000014 * t_cent))
+            + np.sin(2.0 * m_rad) * (0.019993 - 0.000101 * t_cent)
+            + np.sin(3.0 * m_rad) * 0.000289
         )
-    )
 
-    utc_min = (utc_ms % 86_400_000.0) / 60_000.0
-    sun_lon_rad = (180.0 - (utc_min + eot_min) / 4.0) * _DEG2RAD
+        omega_rad = (125.04 - 1934.136 * t_cent) * _DEG2RAD
+        lambda_app_deg = (l0_deg + c_deg) - 0.00569 - 0.00478 * np.sin(omega_rad)
 
-    xm, ym, _ = _get_basis(pole_lat_deg, pole_lon_deg)
-    cos_decl = np.cos(decl_rad)
-    vx = cos_decl * np.cos(sun_lon_rad)
-    vy = cos_decl * np.sin(sun_lon_rad)
-    vz = np.sin(decl_rad)
+        eps0_deg = (
+            23.0
+            + (
+                26.0
+                + (21.448 - t_cent * (46.815 + t_cent * (0.00059 - t_cent * 0.001813))) / 60.0
+            )
+            / 60.0
+        )
+        eps_rad = (eps0_deg + 0.00256 * np.cos(omega_rad)) * _DEG2RAD
 
-    mx = xm[0] * vx + xm[1] * vy + xm[2] * vz
-    my = ym[0] * vx + ym[1] * vy + ym[2] * vz
-    sun_mlon = np.arctan2(my, mx) * _RAD2DEG
+        decl_rad = np.arcsin(
+            np.clip(np.sin(eps_rad) * np.sin(lambda_app_deg * _DEG2RAD), -1.0, 1.0),
+        )
 
-    _, st_mlon = geo_to_magnetic_dipole(
-        lat_deg,
-        lon_deg,
-        pole_lat_deg=pole_lat_deg,
-        pole_lon_deg=pole_lon_deg,
-    )
-    return (12.0 + (st_mlon - sun_mlon) / 15.0) % 24.0
+        y = np.tan(eps_rad * 0.5) ** 2
+        l0_rad = l0_deg * _DEG2RAD
+        eot_min = (
+            4.0
+            * _RAD2DEG
+            * (
+                y * np.sin(2.0 * l0_rad)
+                - 2.0 * ecc * np.sin(m_rad)
+                + 4.0 * ecc * y * np.sin(m_rad) * np.cos(2.0 * l0_rad)
+                - 0.5 * y * y * np.sin(4.0 * l0_rad)
+                - 1.25 * ecc * ecc * np.sin(2.0 * m_rad)
+            )
+        )
+
+        utc_min = (utc_ms % 86_400_000.0) / 60_000.0
+        sun_lon_rad = (180.0 - (utc_min + eot_min) / 4.0) * _DEG2RAD
+
+        xm, ym, _ = _get_basis(pole_lat_deg, pole_lon_deg)
+        cos_decl = np.cos(decl_rad)
+        vx = cos_decl * np.cos(sun_lon_rad)
+        vy = cos_decl * np.sin(sun_lon_rad)
+        vz = np.sin(decl_rad)
+
+        mx = xm[0] * vx + xm[1] * vy + xm[2] * vz
+        my = ym[0] * vx + ym[1] * vy + ym[2] * vz
+        sun_mlon = np.arctan2(my, mx) * _RAD2DEG
+
+        _, st_mlon = geo_to_magnetic_dipole(
+            lat_deg,
+            lon_deg,
+            pole_lat_deg=pole_lat_deg,
+            pole_lon_deg=pole_lon_deg,
+        )
+        return (12.0 + (st_mlon - sun_mlon) / 15.0) % 24.0
 
 
 def mlt_sector(mlt_hours: float) -> str:

@@ -11,6 +11,7 @@ import {
   getWorldGeoData,
   measureLocalScalePxPerDeg,
   resolveLabelVisibility,
+  scalePanOffsetForViewport,
 } from "../mapProjection";
 import { ALL_49_STATIONS } from "./fixtures/stations49";
 
@@ -106,5 +107,52 @@ describe("Offline world-110m.topojson & Lambert D3-geo projections", () => {
     expect(placedCodes).toContain("LVV");
     expect(placedCodes).toContain("BEL");
     expect(placed.length).toBeGreaterThan(8);
+  });
+
+  it("scales panOffset proportionally from screen stage dimensions to export dimensions (F-05)", () => {
+    const stations = ALL_49_STATIONS.map((s) => ({ lat_deg: s.lat, lon_deg: s.lon }));
+    const pan = { x: -240, y: 110 };
+    const zoomScale = 3.0;
+    const screenW = 1400;
+    const screenH = 520;
+    const expW = 960;
+    const expH = 440;
+
+    for (const projectionType of ["lcc", "laea"] as const) {
+      const screenProj = createFittedMapProjection({
+        projectionType,
+        regionPreset: "all",
+        width: screenW,
+        height: screenH,
+        stations,
+        zoomScale,
+        panX: pan.x,
+        panY: pan.y,
+      });
+      const centerGeo = screenProj.invert!([screenW * 0.5, screenH * 0.5])!;
+      expect(centerGeo).not.toBeNull();
+
+      const scaledPan = scalePanOffsetForViewport(pan, {
+        projectionType,
+        regionPreset: "all",
+        stations,
+        fromWidth: screenW,
+        fromHeight: screenH,
+        toWidth: expW,
+        toHeight: expH,
+      });
+      const expProj = createFittedMapProjection({
+        projectionType,
+        regionPreset: "all",
+        width: expW,
+        height: expH,
+        stations,
+        zoomScale,
+        panX: scaledPan.x,
+        panY: scaledPan.y,
+      });
+      const projectedCenter = expProj(centerGeo)!;
+      expect(Math.hypot(projectedCenter[0] - expW * 0.5, projectedCenter[1] - expH * 0.5)).toBeLessThan(0.1);
+    }
   });
 });

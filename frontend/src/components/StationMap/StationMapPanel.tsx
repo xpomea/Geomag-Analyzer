@@ -42,6 +42,7 @@ import {
   createMapPathGenerator,
   getWorldGeoData,
   resolveLabelVisibility,
+  scalePanOffsetForViewport,
   type LabelCandidate,
   type MapProjectionType,
   type MapRegionPreset,
@@ -224,6 +225,15 @@ export const StationMapPanel: React.FC = () => {
       labels: ReturnType<typeof resolveLabelVisibility>;
       svgScene: StationMapSvgScene;
     } => {
+      const scaledPan = scalePanOffsetForViewport(panOffset, {
+        projectionType,
+        regionPreset,
+        stations: magnetometers,
+        fromWidth: stageWidth,
+        fromHeight: mapHeight,
+        toWidth: w,
+        toHeight: h,
+      });
       const proj = createFittedMapProjection({
         projectionType,
         regionPreset,
@@ -231,8 +241,8 @@ export const StationMapPanel: React.FC = () => {
         height: h,
         stations: magnetometers,
         zoomScale,
-        panX: panOffset.x,
-        panY: panOffset.y,
+        panX: scaledPan.x,
+        panY: scaledPan.y,
       });
       const pathGen = createMapPathGenerator(proj);
 
@@ -612,6 +622,8 @@ export const StationMapPanel: React.FC = () => {
       zoomScale,
       panOffset.x,
       panOffset.y,
+      stageWidth,
+      mapHeight,
       snapshotMasked,
       effectiveCursorMs,
       state.meridionalChain,

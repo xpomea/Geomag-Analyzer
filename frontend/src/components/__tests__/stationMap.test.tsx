@@ -10,6 +10,7 @@ import type {
 } from "../../api/types";
 import { AnalysisContext, type AnalysisContextValue } from "../../store/AnalysisContext";
 import { INITIAL_ANALYSIS_STATE } from "../../store/analysisReducer";
+import * as exportUtils from "../../utils/exportUtils";
 import { buildWelchPairRequestSignature, computeCursorWindowIndex } from "../../utils/masking";
 import { pCrit, gamma2Crit, scaleGamma2CritForAlpha } from "../../utils/thresholds";
 import { ALL_49_STATIONS } from "../../utils/__tests__/fixtures/stations49";
@@ -751,5 +752,207 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     expect(tooltip).not.toBeNull();
     expect(tooltip?.textContent).toContain("Δφ=28.5°");
     expect(tooltip?.textContent).not.toContain("маск.");
+  });
+
+  it("drops stale snapshot and matrix arcs immediately when parameters change or snapshot request fails (F-02)", async () => {
+    const catalog = build49Catalog();
+    const snapshot = buildSnapshotResponse();
+    // Make GCK significant in XYZ snapshot so transition to XmYm + 500 error proves no stale XYZ leak
+    const gckEntry = snapshot.stations.find((s) => s.station_iaga === "GCK")!;
+    gckEntry.stokes_2d!.p = 0.85;
+    gckEntry.stokes_2d!.is_significant_p = true;
+
+    const g2Crit05 = 0.09;
+    const g2Val = 0.72;
+    const matResp: WelchMatrixResponse = {
+      episode_id: "storm_20261009_11",
+      component: "X",
+      coord_frame: "XYZ",
+      band: "Pc5",
+      station_codes: ["LVV", "PAG"],
+      window_timestamps_utc: ["2026-10-10T12:00:00Z"],
+      gamma2: [
+        [
+          [1, g2Val],
+          [g2Val, 1],
+        ],
+      ],
+      gamma2_crit: [
+        [
+          [g2Crit05, g2Crit05],
+          [g2Crit05, g2Crit05],
+        ],
+      ],
+      phase_deg: [
+        [
+          [0, 18.0],
+          [-18.0, 0],
+        ],
+      ],
+      phase_deg_masked: [
+        [
+          [0, 18.0],
+          [-18.0, 0],
+        ],
+      ],
+      K_ij: [
+        [
+          [4, 4],
+          [4, 4],
+        ],
+      ],
+      is_significant: [
+        [
+          [true, true],
+          [true, true],
+        ],
+      ],
+      cache_hits: { LVV: true, PAG: true },
+      skipped_stations: {},
+      elapsed_ms: 4,
+    };
+
+    let failSnapshot = false;
+    let failMatrix = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/polarization/network-snapshot")) {
+          if (failSnapshot) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ detail: "Snapshot backend error 500" }), {
+                status: 500,
+              }),
+            );
+          }
+          return Promise.resolve(new Response(JSON.stringify(snapshot), { status: 200 }));
+        }
+        if (url.includes("/api/cross/welch/matrix")) {
+          if (failMatrix) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ detail: "Matrix error 500" }), { status: 500 }),
+            );
+          }
+          return Promise.resolve(new Response(JSON.stringify(matResp), { status: 200 }));
+        }
+        if (url.includes("/api/cross/welch/pair")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                episode_id: "storm_20261009_11",
+                station_i: "LVV",
+                station_j: "BEL",
+                component: "Xm",
+                coord_frame: "XmYm",
+                band: "Pc6",
+                available: false,
+                cache_hits: {},
+                window_timestamps_utc: [],
+                freqs_hz: [],
+                K_ij: [],
+                n_eff: [],
+                gamma2: [],
+                gamma2_crit: [],
+                phase_deg: [],
+                phase_deg_masked: [],
+                is_significant: [],
+                is_valid: [],
+                gamma2_tf: [],
+                gamma2_crit_tf: [],
+                phase_deg_tf: [],
+                phase_deg_tf_masked: [],
+                azimuthal: null,
+                warnings: [],
+              } satisfies WelchPairResponse),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }),
+    );
+
+    const csvSpy = vi.spyOn(exportUtils, "downloadTextFile").mockImplementation(() => {});
+
+    // 1. Initial XYZ + Pc5 state: GCK ellipse is significant, matrix arc LVV-PAG renders
+    const ctxXyz = makeCtx(catalog, {
+      state: {
+        ...INITIAL_ANALYSIS_STATE,
+        stationA: "LVV",
+        stationB: "BEL",
+        coordFrame: "XYZ",
+        band: "Pc5",
+        viewRangeMs: [Date.UTC(2026, 9, 9, 0, 0), Date.UTC(2026, 9, 11, 23, 59)],
+        cursorUtcMs: Date.UTC(2026, 9, 10, 12, 0),
+      },
+    });
+    await act(async () => {
+      root.render(
+        <AnalysisContext.Provider value={ctxXyz}>
+          <StationMapPanel />
+        </AnalysisContext.Provider>,
+      );
+    });
+    const netBtn = Array.from(host.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Сеть от LVV"),
+    );
+    expect(netBtn).toBeDefined();
+    act(() => {
+      netBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 290));
+    });
+    expect(host.querySelector('[data-testid="station-node-GCK"]')?.getAttribute("data-status")).toBe("significant");
+    expect(host.querySelector('[data-arc-key="arc:LVV-PAG"]')).not.toBeNull();
+
+    // 2. Switch to XmYm + Pc6 while snapshot & matrix fetches fail -> must drop stale GCK ellipse & LVV-PAG arc immediately
+    failSnapshot = true;
+    failMatrix = true;
+    const ctxXmyErr = makeCtx(catalog, {
+      welchPairRaw: null,
+      welchPairSig: null,
+      maskedWelch: null,
+      state: {
+        ...ctxXyz.state,
+        coordFrame: "XmYm",
+        crossComponent: "Xm",
+        band: "Pc6",
+      },
+    });
+    await act(async () => {
+      root.render(
+        <AnalysisContext.Provider value={ctxXmyErr}>
+          <StationMapPanel />
+        </AnalysisContext.Provider>,
+      );
+    });
+    // Immediate guard before debounce resolves: no stale GCK ellipse or LVV-PAG matrix arc
+    expect(host.querySelector('[data-testid="station-node-GCK"]')?.getAttribute("data-status")).toBe("insignificant");
+    expect(host.querySelector('[data-arc-key="arc:LVV-PAG"]')).toBeNull();
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 290));
+    });
+    expect(host.textContent).toContain("Snapshot backend error 500");
+    expect(host.querySelector('[data-testid="station-node-GCK"]')?.getAttribute("data-status")).toBe("insignificant");
+    expect(host.querySelector('[data-arc-key="arc:LVV-PAG"]')).toBeNull();
+
+    // Exported CSV must also contain coord_frame: XmYm with NO stale XYZ Stokes numbers on GCK
+    const csvBtn = Array.from(host.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "CSV",
+    );
+    expect(csvBtn).toBeDefined();
+    act(() => {
+      (csvBtn as HTMLButtonElement).click();
+    });
+    expect(csvSpy).toHaveBeenCalledTimes(1);
+    const csvContent = String(csvSpy.mock.calls[0][1]);
+    expect(csvContent).toContain("# coord_frame: XmYm");
+    const gckLine = csvContent.split("\n").find((l) => l.startsWith("GCK,"));
+    expect(gckLine).toBeDefined();
+    expect(gckLine).not.toContain(",180,");
+    csvSpy.mockRestore();
   });
 });

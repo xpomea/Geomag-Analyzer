@@ -18,8 +18,10 @@ import {
 import { useCursor } from "../../store/CursorContext";
 import { INITIAL_ANALYSIS_STATE } from "../../store/analysisReducer";
 import { applySolar1Shift } from "../../utils/ballisticShift";
+import * as exportUtils from "../../utils/exportUtils";
 import { applyPolarizationAlphaMask, applyWelchAlphaMask } from "../../utils/masking";
 import { gamma2Crit, pCrit } from "../../utils/thresholds";
+import { SpectrogramPanel } from "../CrossSpectralPanel/SpectrogramPanel";
 import { WelchCrossPanel } from "../CrossSpectralPanel/WelchCrossPanel";
 import { DraftNullableNumberInput } from "../Layout/DraftNumberInput";
 import { MagnetogramPanel } from "../SyncedCharts/MagnetogramPanel";
@@ -714,5 +716,148 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     expect(lastFlrWindowIdx).toBe(60);
 
     vi.unstubAllGlobals();
+  });
+
+  it("exports 2D Spectrogram and Welch heatmaps with matching Frequency [mHz] axis/ticks and SVG 1.1 colors (F-04, F-01)", () => {
+    const fakeCtx = {
+      createImageData: (w: number, h: number) => ({
+        width: w,
+        height: h,
+        data: new Uint8ClampedArray(w * h * 4),
+      }),
+      putImageData: () => {},
+      measureText: (txt: string) => ({ width: txt.length * 6.5 }),
+      fillRect: () => {},
+      clearRect: () => {},
+      beginPath: () => {},
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      stroke: () => {},
+      strokeRect: () => {},
+      fill: () => {},
+      save: () => {},
+      restore: () => {},
+      scale: () => {},
+      translate: () => {},
+      rotate: () => {},
+      setTransform: () => {},
+      fillText: () => {},
+      strokeText: () => {},
+      drawImage: () => {},
+      clip: () => {},
+      rect: () => {},
+      setLineDash: () => {},
+      getLineDash: () => [],
+    } as unknown as CanvasRenderingContext2D;
+    const ctxSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockImplementation((() => fakeCtx) as unknown as typeof HTMLCanvasElement.prototype.getContext);
+    const dataUrlSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, "toDataURL")
+      .mockReturnValue("data:image/png;base64,iVBORw0KGgo=");
+    const dlSpy = vi.spyOn(exportUtils, "downloadTextFile").mockImplementation(() => {});
+
+    const freqs = [0.001, 0.004, 0.008];
+    const ts = ["2026-10-10T01:00:00Z", "2026-10-10T02:00:00Z"];
+    const polWithSpec: PolarizationResponse = {
+      ...samplePolarization(),
+      spectrogram: {
+        timestamps_utc: ts,
+        freqs_hz: freqs,
+        power_x: [
+          [10, 20, 30],
+          [15, 25, 35],
+        ],
+        power_y: [
+          [5, 10, 15],
+          [8, 12, 18],
+        ],
+        power_total: [
+          [15, 30, 45],
+          [23, 37, 53],
+        ],
+      },
+    };
+
+    const specCtx = makeBaseContext({
+      state: { ...INITIAL_ANALYSIS_STATE, exportTheme: "dark" },
+      polarizationRaw: polWithSpec,
+      maskedPolarization: applyPolarizationAlphaMask(polWithSpec, 0.05),
+    });
+
+    act(() => {
+      root.render(
+        <AnalysisContext.Provider value={specCtx}>
+          <SpectrogramPanel />
+        </AnalysisContext.Provider>,
+      );
+    });
+
+    const specSvgBtn = Array.from(host.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "SVG",
+    );
+    expect(specSvgBtn).toBeDefined();
+    act(() => {
+      (specSvgBtn as HTMLButtonElement).click();
+    });
+    expect(dlSpy).toHaveBeenCalledTimes(1);
+    const specSvg = String(dlSpy.mock.calls[0][1]);
+    expect(specSvg).toContain("Frequency [mHz]");
+    expect(specSvg).not.toContain("Frequency [Hz]");
+    expect(specSvg).toContain(">1.00<");
+    expect(specSvg).toContain(">8.00<");
+    expect(specSvg).not.toMatch(/(?:fill|stroke)="rgba\(/i);
+
+    const welch2d: WelchPairResponse = {
+      ...sampleWelchPair(),
+      freqs_hz: freqs,
+      gamma2_tf: [
+        [0.2, 0.8, 0.4],
+        [0.3, 0.9, 0.5],
+      ],
+      gamma2_crit_tf: [0.1, 0.1],
+      phase_deg_tf: [
+        [10, 25, 40],
+        [15, 30, 45],
+      ],
+      phase_deg_tf_masked: [
+        [10, 25, 40],
+        [15, 30, 45],
+      ],
+    };
+    const welchCtx = makeBaseContext({
+      state: { ...INITIAL_ANALYSIS_STATE, exportTheme: "dark" },
+      welchPairRaw: welch2d,
+      welchPairSig: null,
+      maskedWelch: applyWelchAlphaMask(welch2d, 0.05, 0.05),
+    });
+
+    act(() => {
+      root.render(
+        <AnalysisContext.Provider value={welchCtx}>
+          <WelchCrossPanel />
+        </AnalysisContext.Provider>,
+      );
+    });
+
+    const welchSvgBtns = Array.from(host.querySelectorAll("button")).filter(
+      (b) => b.textContent?.trim() === "SVG",
+    );
+    expect(welchSvgBtns.length).toBeGreaterThanOrEqual(2);
+    act(() => {
+      (welchSvgBtns[1] as HTMLButtonElement).click();
+    });
+    expect(dlSpy).toHaveBeenCalledTimes(2);
+    const welch2dSvg = String(dlSpy.mock.calls[1][1]);
+    expect(welch2dSvg).toContain("Frequency [mHz]");
+    expect(welch2dSvg).not.toContain("Frequency [Hz]");
+    expect(welch2dSvg).toContain(">1.00<");
+    expect(welch2dSvg).toContain(">8.00<");
+    expect(welch2dSvg).not.toMatch(/(?:fill|stroke)="rgba\(/i);
+
+    dlSpy.mockRestore();
+    ctxSpy.mockRestore();
+    dataUrlSpy.mockRestore();
   });
 });

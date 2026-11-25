@@ -98,6 +98,45 @@ const CSS_VAR_FALLBACKS: Record<string, string> = {
 };
 
 /**
+ * Convert CSS3 rgba(r, g, b, a) in SVG fill/stroke attributes into SVG 1.1
+ * paint="rgb(r,g,b)" + fill-opacity/stroke-opacity so Microsoft Word, LibreOffice,
+ * and older Illustrator SVG 1.1 parsers never fall back to opaque black.
+ */
+function normalizeSvgRgbaAttributes(svg: string): string {
+  return svg.replace(/<[a-zA-Z][^>]*>/g, (tag) => {
+    let nextTag = tag;
+    for (const attr of ["fill", "stroke"] as const) {
+      const rgbaRe = new RegExp(
+        `\\b${attr}="rgba\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*\\)"`,
+        "i",
+      );
+      const match = nextTag.match(rgbaRe);
+      if (!match) continue;
+      const r = Math.min(255, Math.max(0, Math.round(Number(match[1]))));
+      const g = Math.min(255, Math.max(0, Math.round(Number(match[2]))));
+      const b = Math.min(255, Math.max(0, Math.round(Number(match[3]))));
+      const a = Math.min(1, Math.max(0, Number(match[4])));
+      if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b) || !Number.isFinite(a)) {
+        continue;
+      }
+      const opAttr = `${attr}-opacity`;
+      const opRe = new RegExp(`\\b${opAttr}="([\\d.]+)"`, "i");
+      const existingOp = nextTag.match(opRe);
+      if (existingOp) {
+        const combined = Math.min(1, Math.max(0, Number(existingOp[1]) * a));
+        const opStr = Number.isFinite(combined) ? Number(combined.toFixed(4)).toString() : "1";
+        nextTag = nextTag.replace(rgbaRe, `${attr}="rgb(${r},${g},${b})"`);
+        nextTag = nextTag.replace(opRe, `${opAttr}="${opStr}"`);
+      } else {
+        const opStr = Number(a.toFixed(4)).toString();
+        nextTag = nextTag.replace(rgbaRe, `${attr}="rgb(${r},${g},${b})" ${opAttr}="${opStr}"`);
+      }
+    }
+    return nextTag;
+  });
+}
+
+/**
  * Normalize an SVG string so it opens cleanly in MS Word, LibreOffice, Inkscape,
  * Illustrator, and browsers without external CSS variables or missing namespaces.
  */
@@ -117,6 +156,9 @@ export function sanitizeStandaloneSvg(
   out = out.replace(/var\((--[a-zA-Z0-9_-]+)(?:,\s*([^)]+))?\)/g, (_m, varName, fb) => {
     return CSS_VAR_FALLBACKS[String(varName)] ?? (fb ? String(fb).trim() : "#334155");
   });
+
+  // Ensure SVG 1.1 compatibility by splitting rgba(...) fill/stroke attributes
+  out = normalizeSvgRgbaAttributes(out);
 
   // Strip any existing xml declaration before rebuilding uniformly
   out = out.replace(/^<\?xml[^>]*\?>\s*/i, "");
@@ -646,7 +688,8 @@ export function buildHeatmapPublicationSvg(spec: HeatmapExportSpec): string {
   const mutedColor = isLight ? "#475569" : "#94a3b8";
   const frameColor = isLight ? "#475569" : "#334155";
   const contourColor = isLight ? "#0f172a" : "#f8fafc";
-  const coiFill = isLight ? "rgba(15, 23, 42, 0.25)" : "rgba(15, 23, 42, 0.58)";
+  const coiFillColor = "#0f172a";
+  const coiFillOpacity = isLight ? "0.25" : "0.58";
   const coiStroke = isLight ? "#334155" : "#f8fafc";
   const arrowColor = isLight ? "#0f172a" : "#ffffff";
 
@@ -785,7 +828,7 @@ export function buildHeatmapPublicationSvg(spec: HeatmapExportSpec): string {
           `<line x1="${plotLeft}" y1="${gy.toFixed(2)}" x2="${plotRight}" y2="${gy.toFixed(2)}" stroke="${gCol}" stroke-width="1" stroke-dasharray="5,4"/>`,
         );
         parts.push(
-          `<rect x="${plotLeft + 4}" y="${(gy - 12).toFixed(2)}" width="84" height="12" fill="${isLight ? "rgba(255,255,255,0.85)" : "rgba(15,23,42,0.82)"}" rx="2"/>`,
+          `<rect x="${plotLeft + 4}" y="${(gy - 12).toFixed(2)}" width="84" height="12" fill="${isLight ? "#ffffff" : "#0f172a"}" fill-opacity="${isLight ? "0.85" : "0.82"}" rx="2"/>`,
         );
         parts.push(
           `<text x="${plotLeft + 7}" y="${(gy - 3).toFixed(2)}" fill="${fgColor}" font-family="JetBrains Mono, Consolas, monospace" font-size="9.5">${escapeXml(g.label)}</text>`,
@@ -818,7 +861,9 @@ export function buildHeatmapPublicationSvg(spec: HeatmapExportSpec): string {
           polyPts.push(`${xk.toFixed(2)},${yk.toFixed(2)}`);
         }
         polyPts.push(`${lastX.toFixed(2)},${outsideY.toFixed(2)}`);
-        parts.push(`<polygon points="${polyPts.join(" ")}" fill="${coiFill}"/>`);
+        parts.push(
+          `<polygon points="${polyPts.join(" ")}" fill="${coiFillColor}" fill-opacity="${coiFillOpacity}"/>`,
+        );
         runStart = -1;
       }
     }
@@ -1034,8 +1079,10 @@ export function buildStationMapSvg(scene: StationMapSvgScene): string {
   const landFill = isLight ? "#e2e8f0" : "#162238";
   const coastStroke = isLight ? "#94a3b8" : "#334155";
   const borderStroke = isLight ? "#cbd5e1" : "#1e293b";
-  const gratStroke = isLight ? "rgba(148,163,184,0.35)" : "rgba(51,65,85,0.4)";
-  const nightFill = isLight ? "rgba(15, 23, 42, 0.14)" : "rgba(2, 6, 23, 0.42)";
+  const gratStroke = isLight ? "#94a3b8" : "#334155";
+  const gratOpacity = isLight ? "0.35" : "0.4";
+  const nightFill = isLight ? "#0f172a" : "#020617";
+  const nightOpacity = isLight ? "0.14" : "0.42";
   const termStroke = isLight ? "#b45309" : "#f59e0b";
   const mlt12Stroke = isLight ? "#d97706" : "#fbbf24";
   const cwColor = isLight ? "#dc2626" : "#f43f5e";
@@ -1065,7 +1112,7 @@ export function buildStationMapSvg(scene: StationMapSvgScene): string {
   parts.push(`<g clip-path="url(#map-viewport-clip)">`);
   if (scene.graticulePathD) {
     parts.push(
-      `<path d="${scene.graticulePathD}" fill="none" stroke="${gratStroke}" stroke-width="0.7"/>`,
+      `<path d="${scene.graticulePathD}" fill="none" stroke="${gratStroke}" stroke-opacity="${gratOpacity}" stroke-width="0.7"/>`,
     );
   }
   for (const d of scene.landPathsD) {
@@ -1083,7 +1130,9 @@ export function buildStationMapSvg(scene: StationMapSvgScene): string {
 
   if (scene.showTerminator) {
     if (scene.nightPolyPathD) {
-      parts.push(`<path d="${scene.nightPolyPathD}" fill="${nightFill}" stroke="none"/>`);
+      parts.push(
+        `<path d="${scene.nightPolyPathD}" fill="${nightFill}" fill-opacity="${nightOpacity}" stroke="none"/>`,
+      );
     }
     if (scene.terminatorPathD) {
       parts.push(
@@ -1102,7 +1151,7 @@ export function buildStationMapSvg(scene: StationMapSvgScene): string {
     }
     if (scene.mlt12LabelPos) {
       parts.push(
-        `<rect x="${(scene.mlt12LabelPos[0] - 28).toFixed(1)}" y="${(scene.mlt12LabelPos[1] - 9).toFixed(1)}" width="56" height="16" rx="3" fill="${isLight ? "rgba(255,255,255,0.9)" : "rgba(15,23,42,0.88)"}" stroke="${mlt12Stroke}" stroke-width="0.8"/>`,
+        `<rect x="${(scene.mlt12LabelPos[0] - 28).toFixed(1)}" y="${(scene.mlt12LabelPos[1] - 9).toFixed(1)}" width="56" height="16" rx="3" fill="${isLight ? "#ffffff" : "#0f172a"}" fill-opacity="${isLight ? "0.9" : "0.88"}" stroke="${mlt12Stroke}" stroke-width="0.8"/>`,
       );
       parts.push(
         `<text x="${scene.mlt12LabelPos[0].toFixed(1)}" y="${(scene.mlt12LabelPos[1] + 2.5).toFixed(1)}" text-anchor="middle" fill="${mlt12Stroke}" font-family="JetBrains Mono, Consolas, monospace" font-size="9.5" font-weight="700">MLT = 12</text>`,
@@ -1137,7 +1186,7 @@ export function buildStationMapSvg(scene: StationMapSvgScene): string {
       if (arc.labelText && arc.labelX !== null && arc.labelY !== null) {
         const boxW = Math.max(88, arc.labelText.length * 6.2 + 12);
         parts.push(
-          `<rect x="${(arc.labelX - boxW * 0.5).toFixed(1)}" y="${(arc.labelY - 10).toFixed(1)}" width="${boxW.toFixed(1)}" height="16" rx="3" fill="${isLight ? "rgba(255,255,255,0.92)" : "rgba(15,23,42,0.9)"}" stroke="${col}" stroke-width="0.9"/>`,
+          `<rect x="${(arc.labelX - boxW * 0.5).toFixed(1)}" y="${(arc.labelY - 10).toFixed(1)}" width="${boxW.toFixed(1)}" height="16" rx="3" fill="${isLight ? "#ffffff" : "#0f172a"}" fill-opacity="${isLight ? "0.92" : "0.9"}" stroke="${col}" stroke-width="0.9"/>`,
         );
         parts.push(
           `<text x="${arc.labelX.toFixed(1)}" y="${(arc.labelY + 1.5).toFixed(1)}" text-anchor="middle" fill="${textColor}" font-family="JetBrains Mono, Consolas, monospace" font-size="9.5" font-weight="600">${escapeXml(arc.labelText)}</text>`,
@@ -1174,24 +1223,13 @@ export function buildStationMapSvg(scene: StationMapSvgScene): string {
 
     if (scene.showEllipses && g.status === "significant") {
       const col = g.sense === "CW" ? cwColor : g.sense === "CCW" ? ccwColor : linColor;
-      const fill =
-        g.sense === "CW"
-          ? isLight
-            ? "rgba(220, 38, 38, 0.16)"
-            : "rgba(244, 63, 94, 0.22)"
-          : g.sense === "CCW"
-            ? isLight
-              ? "rgba(2, 132, 199, 0.16)"
-              : "rgba(56, 189, 248, 0.22)"
-            : isLight
-              ? "rgba(109, 40, 217, 0.16)"
-              : "rgba(167, 139, 250, 0.22)";
+      const fillOpacity = isLight ? "0.16" : "0.22";
 
       parts.push(
         `<g transform="translate(${st.x.toFixed(2)}, ${st.y.toFixed(2)}) rotate(${g.rotationDeg.toFixed(2)})">`,
       );
       parts.push(
-        `<ellipse cx="0" cy="0" rx="${Math.max(0.8, g.minorRadius).toFixed(2)}" ry="${g.majorRadius.toFixed(2)}" fill="${fill}" stroke="${col}" stroke-width="1.7"/>`,
+        `<ellipse cx="0" cy="0" rx="${Math.max(0.8, g.minorRadius).toFixed(2)}" ry="${g.majorRadius.toFixed(2)}" fill="${col}" fill-opacity="${fillOpacity}" stroke="${col}" stroke-width="1.7"/>`,
       );
       parts.push(
         `<line x1="0" y1="${(-g.majorRadius).toFixed(2)}" x2="0" y2="${g.majorRadius.toFixed(2)}" stroke="${col}" stroke-width="0.9" opacity="0.65"/>`,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -92,3 +93,29 @@ def test_compute_mlt_input_types_and_vectorized_array(mlt_fixture: dict) -> None
     unix_sec = dt_obj.timestamp()
     for val in (dt_obj, ts_pd, unix_sec):
         assert compute_mlt(49.9, 23.8, val) == pytest.approx(expected[0], abs=1e-9)
+
+
+def test_mlt_handles_nat_and_nan_timestamps(mlt_fixture: dict) -> None:
+    """Missing/NaT timestamps must propagate as NaN rather than INT64_MIN dummy dates."""
+    from geomag_core.mlt import utc_to_unix_ms
+
+    valid_iso = mlt_fixture["mlt_cases"][0]["utc_iso"]
+    expected_mlt = compute_mlt(49.9, 23.8, valid_iso)
+
+    for missing in (np.datetime64("NaT"), np.datetime64("NaT", "ns"), pd.NaT, float("nan")):
+        assert math.isnan(utc_to_unix_ms(missing))
+        sub = compute_subsolar_point(missing)
+        assert math.isnan(sub.declination_deg)
+        assert math.isnan(sub.lon_deg)
+        assert math.isnan(solar_elevation_deg(49.9, 23.8, missing))
+        assert math.isnan(compute_mlt(49.9, 23.8, missing))
+
+    arr_np = np.array([valid_iso.rstrip("Z"), "NaT"], dtype="datetime64[ns]")
+    out_np = compute_mlt_array(49.9, 23.8, arr_np)
+    assert out_np[0] == pytest.approx(expected_mlt, abs=1e-9)
+    assert math.isnan(out_np[1])
+
+    idx_pd = pd.DatetimeIndex([valid_iso, pd.NaT])
+    out_pd = compute_mlt_array(49.9, 23.8, idx_pd)
+    assert out_pd[0] == pytest.approx(expected_mlt, abs=1e-9)
+    assert math.isnan(out_pd[1])
