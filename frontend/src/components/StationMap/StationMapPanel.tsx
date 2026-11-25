@@ -42,9 +42,11 @@ import {
   getWorldGeoData,
   resolveLabelVisibility,
   scalePanOffsetForViewport,
+  zoomMapViewportAtAnchor,
   type LabelCandidate,
   type MapProjectionType,
   type MapRegionPreset,
+  type MapViewportState,
 } from "../../utils/mapProjection";
 import { canonicalizeStationPair } from "../../utils/stationPair";
 import {
@@ -165,8 +167,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
   const [showAllLabels, setShowAllLabels] = useState(false);
   const [ellipseSizeMode, setEllipseSizeMode] = useState<"log" | "sqrt">("log");
 
-  const [zoomScale, setZoomScale] = useState(1);
-  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [viewport, setViewport] = useState<MapViewportState>({ zoom: 1, panX: 0, panY: 0 });
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -177,12 +178,30 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
   const suppressClickRef = useRef(false);
 
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const [stageWidth, setStageWidth] = useState(880);
   const [stageHeight, setStageHeight] = useState(280);
   const [hoveredStation, setHoveredStation] = useState<string | null>(null);
   const [hoveredOulu, setHoveredOulu] = useState(false);
   const [hoveredArcKey, setHoveredArcKey] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const mapHeight = fillHeight ? stageHeight : expanded ? 520 : 380;
+  const stageSizeRef = useRef({ width: stageWidth, height: mapHeight });
+  stageSizeRef.current = { width: stageWidth, height: mapHeight };
+
+  const applyZoomAtAnchor = useCallback((factor: number, anchorX: number, anchorY: number) => {
+    const { width, height } = stageSizeRef.current;
+    setViewport((prev) =>
+      zoomMapViewportAtAnchor(prev, {
+        factor,
+        anchorX,
+        anchorY,
+        width,
+        height,
+      }),
+    );
+  }, []);
 
   useEffect(() => {
     if (!layersOpen) return;
@@ -215,15 +234,20 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
   useEffect(() => {
     if (!stageEl) return;
     const onWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
       e.preventDefault();
-      const factor = e.deltaY > 0 ? 0.85 : 1.18;
-      setZoomScale((prev) => Math.min(8, Math.max(0.7, Number((prev * factor).toFixed(3)))));
+      const factor = e.deltaY > 0 ? 1 / 1.18 : 1.18;
+      const rect = (svgRef.current ?? stageEl).getBoundingClientRect();
+      const { width: curW, height: curH } = stageSizeRef.current;
+      const anchorX =
+        rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * curW : e.clientX - rect.left;
+      const anchorY =
+        rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * curH : e.clientY - rect.top;
+      applyZoomAtAnchor(factor, anchorX, anchorY);
     };
     stageEl.addEventListener("wheel", onWheel, { passive: false });
     return () => stageEl.removeEventListener("wheel", onWheel);
-  }, [stageEl]);
-
-  const mapHeight = fillHeight ? stageHeight : expanded ? 520 : 380;
+  }, [stageEl, applyZoomAtAnchor]);
 
   const {
     effectiveCursorMs,
@@ -270,22 +294,25 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
       labels: ReturnType<typeof resolveLabelVisibility>;
       svgScene: StationMapSvgScene;
     } => {
-      const scaledPan = scalePanOffsetForViewport(panOffset, {
-        projectionType,
-        regionPreset,
-        stations: magnetometers,
-        fromWidth: stageWidth,
-        fromHeight: mapHeight,
-        toWidth: w,
-        toHeight: h,
-      });
+      const scaledPan = scalePanOffsetForViewport(
+        { x: viewport.panX, y: viewport.panY },
+        {
+          projectionType,
+          regionPreset,
+          stations: magnetometers,
+          fromWidth: stageWidth,
+          fromHeight: mapHeight,
+          toWidth: w,
+          toHeight: h,
+        },
+      );
       const proj = createFittedMapProjection({
         projectionType,
         regionPreset,
         width: w,
         height: h,
         stations: magnetometers,
-        zoomScale,
+        zoomScale: viewport.zoom,
         panX: scaledPan.x,
         panY: scaledPan.y,
       });
@@ -659,9 +686,9 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
       projectionType,
       regionPreset,
       magnetometers,
-      zoomScale,
-      panOffset.x,
-      panOffset.y,
+      viewport.zoom,
+      viewport.panX,
+      viewport.panY,
       stageWidth,
       mapHeight,
       snapshotMasked,
@@ -748,8 +775,8 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
-      origPanX: panOffset.x,
-      origPanY: panOffset.y,
+      origPanX: viewport.panX,
+      origPanY: viewport.panY,
       moved: false,
     };
   };
@@ -765,10 +792,13 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
         dragRef.current.moved = true;
       }
-      setPanOffset({
-        x: dragRef.current.origPanX + dx,
-        y: dragRef.current.origPanY + dy,
-      });
+      const nextPanX = dragRef.current.origPanX + dx;
+      const nextPanY = dragRef.current.origPanY + dy;
+      setViewport((prev) => ({
+        ...prev,
+        panX: nextPanX,
+        panY: nextPanY,
+      }));
     }
   };
 
@@ -997,8 +1027,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
                   className={`chip-btn ${regionPreset === key ? "active" : ""}`}
                   onClick={() => {
                     setRegionPreset(key);
-                    setZoomScale(1);
-                    setPanOffset({ x: 0, y: 0 });
+                    setViewport({ zoom: 1, panX: 0, panY: 0 });
                   }}
                 >
                   {MAP_REGION_PRESETS[key].label}
@@ -1154,7 +1183,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-icon"
-                onClick={() => setZoomScale((z) => Math.min(8, z * 1.25))}
+                onClick={() => applyZoomAtAnchor(1.25, stageWidth * 0.5, mapHeight * 0.5)}
                 title="Zoom in"
               >
                 <ZoomIn size={12} />
@@ -1162,7 +1191,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-icon"
-                onClick={() => setZoomScale((z) => Math.max(0.7, z * 0.8))}
+                onClick={() => applyZoomAtAnchor(0.8, stageWidth * 0.5, mapHeight * 0.5)}
                 title="Zoom out"
               >
                 <ZoomOut size={12} />
@@ -1170,10 +1199,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
               <button
                 type="button"
                 className="btn btn-sm btn-icon"
-                onClick={() => {
-                  setZoomScale(1);
-                  setPanOffset({ x: 0, y: 0 });
-                }}
+                onClick={() => setViewport({ zoom: 1, panX: 0, panY: 0 })}
                 title="Reset zoom and pan"
               >
                 <RotateCcw size={12} />
@@ -1226,6 +1252,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
             }}
           >
             <svg
+              ref={svgRef}
               className="map-svg"
               width={stageWidth}
               height={mapHeight}

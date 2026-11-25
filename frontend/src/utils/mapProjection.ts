@@ -217,6 +217,65 @@ export function createFittedMapProjection({
   return proj;
 }
 
+export interface MapViewportState {
+  zoom: number;
+  panX: number;
+  panY: number;
+}
+
+export const MIN_MAP_ZOOM = 0.7;
+export const MAX_MAP_ZOOM = 8;
+
+export interface ZoomAtAnchorParams {
+  factor: number;
+  anchorX: number;
+  anchorY: number;
+  width: number;
+  height: number;
+  minZoom?: number;
+  maxZoom?: number;
+}
+
+/**
+ * Update (zoom, panX, panY) so the geographic point currently projected at (anchorX, anchorY)
+ * remains pinned at the same screen coordinates after zooming.
+ */
+export function zoomMapViewportAtAnchor(
+  prev: MapViewportState,
+  {
+    factor,
+    anchorX,
+    anchorY,
+    width,
+    height,
+    minZoom = MIN_MAP_ZOOM,
+    maxZoom = MAX_MAP_ZOOM,
+  }: ZoomAtAnchorParams,
+): MapViewportState {
+  if (!Number.isFinite(factor) || factor <= 0 || !Number.isFinite(prev.zoom) || prev.zoom <= 0) {
+    return prev;
+  }
+  const nextZoom = Math.min(
+    maxZoom,
+    Math.max(minZoom, Number((prev.zoom * factor).toFixed(4))),
+  );
+  if (Math.abs(nextZoom - prev.zoom) < 1e-9) {
+    return prev;
+  }
+
+  const ratio = nextZoom / prev.zoom;
+  const cx = Math.max(240, width) * 0.5;
+  const cy = Math.max(180, height) * 0.5;
+  const rawPanX = ratio * prev.panX + (1 - ratio) * (anchorX - cx);
+  const rawPanY = ratio * prev.panY + (1 - ratio) * (anchorY - cy);
+
+  return {
+    zoom: nextZoom,
+    panX: Math.abs(rawPanX) < 1e-9 ? 0 : rawPanX,
+    panY: Math.abs(rawPanY) < 1e-9 ? 0 : rawPanY,
+  };
+}
+
 /**
  * Proportionally rescale screen pan offset [px] when rendering the same zoomed/panned
  * map view into a different viewport size (e.g. responsive screen stage -> fixed 960px SVG).

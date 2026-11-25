@@ -980,4 +980,81 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     expect(gckLine).not.toContain(",180,");
     csvSpy.mockRestore();
   });
+
+  it("zooms around cursor position on wheel events while pinning the station under cursor", async () => {
+    const catalog = build49Catalog();
+    const snapshot = buildSnapshotResponse();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/polarization/network-snapshot")) {
+          return Promise.resolve(new Response(JSON.stringify(snapshot), { status: 200 }));
+        }
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }),
+    );
+
+    const ctx = makeCtx(catalog);
+
+    await act(async () => {
+      root.render(
+        <AnalysisContext.Provider value={ctx}>
+          <StationMapPanel />
+        </AnalysisContext.Provider>,
+      );
+    });
+
+    const stageEl = host.querySelector(".map-stage") as HTMLDivElement;
+    const svgEl = host.querySelector(".map-svg") as SVGSVGElement;
+    expect(stageEl).not.toBeNull();
+    expect(svgEl).not.toBeNull();
+
+    const svgW = Number(svgEl.getAttribute("width"));
+    const svgH = Number(svgEl.getAttribute("height"));
+    vi.spyOn(svgEl, "getBoundingClientRect").mockReturnValue({
+      left: 100,
+      top: 50,
+      width: svgW,
+      height: svgH,
+      right: 100 + svgW,
+      bottom: 50 + svgH,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    });
+
+    const getStationCenter = (code: string) => {
+      const circle = host.querySelector(`[data-testid="station-node-${code}"] circle`);
+      expect(circle).not.toBeNull();
+      return {
+        x: Number(circle!.getAttribute("cx")),
+        y: Number(circle!.getAttribute("cy")),
+      };
+    };
+
+    const ottBefore = getStationCenter("OTT");
+    const lvvBefore = getStationCenter("LVV");
+    const distBefore = Math.hypot(lvvBefore.x - ottBefore.x, lvvBefore.y - ottBefore.y);
+
+    await act(async () => {
+      stageEl.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY: -100,
+          clientX: 100 + ottBefore.x,
+          clientY: 50 + ottBefore.y,
+        }),
+      );
+    });
+
+    const ottAfter = getStationCenter("OTT");
+    const lvvAfter = getStationCenter("LVV");
+    const distAfter = Math.hypot(lvvAfter.x - ottAfter.x, lvvAfter.y - ottAfter.y);
+
+    // Station under the cursor stays pinned (< 1 px), while distant station moves outward by ~1.18x
+    expect(Math.hypot(ottAfter.x - ottBefore.x, ottAfter.y - ottBefore.y)).toBeLessThan(1.0);
+    expect(distAfter).toBeGreaterThan(distBefore * 1.1);
+  });
 });

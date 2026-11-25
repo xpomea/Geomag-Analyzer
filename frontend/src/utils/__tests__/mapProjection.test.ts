@@ -6,12 +6,14 @@ import {
   computeSubsolarPoint,
 } from "../astronomy";
 import {
+  MAX_MAP_ZOOM,
   createFittedMapProjection,
   createMapPathGenerator,
   getWorldGeoData,
   measureLocalScalePxPerDeg,
   resolveLabelVisibility,
   scalePanOffsetForViewport,
+  zoomMapViewportAtAnchor,
 } from "../mapProjection";
 import { ALL_49_STATIONS } from "./fixtures/stations49";
 
@@ -154,5 +156,91 @@ describe("Offline world-110m.topojson & Lambert D3-geo projections", () => {
       const projectedCenter = expProj(centerGeo)!;
       expect(Math.hypot(projectedCenter[0] - expW * 0.5, projectedCenter[1] - expH * 0.5)).toBeLessThan(0.1);
     }
+  });
+
+  it("pins the geographic anchor point during zoomMapViewportAtAnchor across LCC & LAEA without max-zoom drift", () => {
+    const stations = ALL_49_STATIONS.map((s) => ({ lat_deg: s.lat, lon_deg: s.lon }));
+    const width = 880;
+    const height = 380;
+    const anchorX = 215;
+    const anchorY = 120;
+
+    for (const projectionType of ["lcc", "laea"] as const) {
+      const start = { zoom: 1.5, panX: -45, panY: 28 };
+      const projBefore = createFittedMapProjection({
+        projectionType,
+        regionPreset: "all",
+        width,
+        height,
+        stations,
+        zoomScale: start.zoom,
+        panX: start.panX,
+        panY: start.panY,
+      });
+      const anchorGeo = projBefore.invert!([anchorX, anchorY])!;
+      expect(anchorGeo).not.toBeNull();
+
+      const zoomedIn = zoomMapViewportAtAnchor(start, {
+        factor: 1.18,
+        anchorX,
+        anchorY,
+        width,
+        height,
+      });
+      const projIn = createFittedMapProjection({
+        projectionType,
+        regionPreset: "all",
+        width,
+        height,
+        stations,
+        zoomScale: zoomedIn.zoom,
+        panX: zoomedIn.panX,
+        panY: zoomedIn.panY,
+      });
+      const ptIn = projIn(anchorGeo)!;
+      expect(Math.hypot(ptIn[0] - anchorX, ptIn[1] - anchorY)).toBeLessThan(1e-6);
+
+      const zoomedOut = zoomMapViewportAtAnchor(zoomedIn, {
+        factor: 1 / 1.18,
+        anchorX,
+        anchorY,
+        width,
+        height,
+      });
+      const projOut = createFittedMapProjection({
+        projectionType,
+        regionPreset: "all",
+        width,
+        height,
+        stations,
+        zoomScale: zoomedOut.zoom,
+        panX: zoomedOut.panX,
+        panY: zoomedOut.panY,
+      });
+      const ptOut = projOut(anchorGeo)!;
+      expect(Math.hypot(ptOut[0] - anchorX, ptOut[1] - anchorY)).toBeLessThan(1e-6);
+    }
+
+    // Symmetric zoom-in then zoom-out from {1, 0, 0} returns cleanly to {1, 0, 0}
+    const zIn = zoomMapViewportAtAnchor(
+      { zoom: 1, panX: 0, panY: 0 },
+      { factor: 1.18, anchorX, anchorY, width, height },
+    );
+    const zBack = zoomMapViewportAtAnchor(zIn, {
+      factor: 1 / 1.18,
+      anchorX,
+      anchorY,
+      width,
+      height,
+    });
+    expect(zBack.zoom).toBe(1);
+    expect(Math.abs(zBack.panX)).toBeLessThan(1e-6);
+    expect(Math.abs(zBack.panY)).toBeLessThan(1e-6);
+
+    // Clamped at MAX_MAP_ZOOM: extra zoom-in does not drift pan
+    const atMax = { zoom: MAX_MAP_ZOOM, panX: 120, panY: -80 };
+    expect(
+      zoomMapViewportAtAnchor(atMax, { factor: 1.18, anchorX, anchorY, width, height }),
+    ).toEqual(atMax);
   });
 });
