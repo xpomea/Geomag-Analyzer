@@ -1,10 +1,16 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Play, Sparkles, XCircle } from "lucide-react";
 import { TERMINAL_JOB_STATUSES } from "../../api/client";
 import type { GapPolicy } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
+import {
+  buildExportFilename,
+  buildHeatmapPublicationSvg,
+  formatCsvWithMetadata,
+} from "../../utils/exportUtils";
 import { formatEta } from "../../utils/formatters";
+import { ExportToolbar } from "../Common/ExportToolbar";
 import { DraftNumberInput } from "../Layout/DraftNumberInput";
 import { ScientificHeatmap2D } from "../SyncedCharts/ScientificHeatmap2D";
 
@@ -73,6 +79,71 @@ export const WtcPanel: React.FC = () => {
       insideCoi: wtcResult.inside_coi,
     };
   }, [showContours, wtcResult]);
+
+  const wtcExportBase = wtcResult
+    ? buildExportFilename(
+        [mapView, wtcResult.episode_id, wtcResult.station_i, wtcResult.station_j, wtcResult.component],
+        "svg",
+      ).replace(/\.svg$/, "")
+    : "wtc_export";
+
+  const getWtcExportSvg = useCallback(() => {
+    if (!wtcResult) return null;
+    return buildHeatmapPublicationSvg({
+      title: `${mapView === "wtc" ? "Wavelet Coherence (WTC R^2)" : "Cross-Wavelet Power (XWT |W_ij|)"} — ${wtcResult.station_i}↔${wtcResult.station_j}`,
+      subtitle: `${wtcResult.episode_id} | ${wtcResult.component} (${wtcResult.coord_frame}) | AR(1) a1=${wtcResult.alpha1_i.toFixed(2)}/${wtcResult.alpha1_j.toFixed(2)} | N_MC=${wtcResult.n_surrogates} | alpha=${wtcResult.alpha}`,
+      theme: state.exportTheme,
+      width: 900,
+      height: 340,
+      timestampsUtc: wtcResult.timestamps_utc,
+      yValues: wtcResult.periods_sec,
+      yLabel: "Period [s]",
+      yScaleMode: "log",
+      invertY: true,
+      zMatrix: mapView === "wtc" ? wtcResult.wtc_r2 : wtcResult.xwt_power,
+      matrixLayout: "y-by-time",
+      zTransform: mapView === "wtc" ? "linear" : "log10",
+      zMin: mapView === "wtc" ? 0 : undefined,
+      zMax: mapView === "wtc" ? 1 : undefined,
+      zUnit: mapView === "wtc" ? "R^2" : "log|W|",
+      colormap: mapView === "wtc" ? "turbo" : "plasma",
+      viewRangeMs: state.viewRangeMs,
+      coiPeriods: wtcResult.coi_periods_sec,
+      contourGrid: contourGridProp,
+      phaseVectors: phaseVectorsProp,
+    });
+  }, [wtcResult, mapView, state.exportTheme, state.viewRangeMs, contourGridProp, phaseVectorsProp]);
+
+  const getWtcExportCsv = useCallback(() => {
+    if (!wtcResult) return null;
+    const mat = mapView === "wtc" ? wtcResult.wtc_r2 : wtcResult.xwt_power;
+    const cols = ["period_sec", "scale", "wtc_sig95", ...wtcResult.timestamps_utc];
+    const rows = wtcResult.periods_sec.map((pSec, sIdx) => [
+      pSec,
+      wtcResult.scales[sIdx] ?? null,
+      wtcResult.wtc_sig95?.[sIdx] ?? null,
+      ...(mat[sIdx] ?? []),
+    ]);
+    return formatCsvWithMetadata(
+      {
+        job_id: wtcResult.job_id,
+        cache_key: wtcResult.cache_key,
+        episode_id: wtcResult.episode_id,
+        station_i: wtcResult.station_i,
+        station_j: wtcResult.station_j,
+        component: wtcResult.component,
+        coord_frame: wtcResult.coord_frame,
+        matrix_mode: mapView,
+        gap_policy: wtcResult.gap_policy,
+        alpha1_i: wtcResult.alpha1_i,
+        alpha1_j: wtcResult.alpha1_j,
+        n_surrogates: wtcResult.n_surrogates,
+        alpha: wtcResult.alpha,
+      },
+      cols,
+      rows,
+    );
+  }, [wtcResult, mapView]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -308,6 +379,13 @@ export const WtcPanel: React.FC = () => {
               >
                 Фазовые стрелки
               </button>
+              <ExportToolbar
+                baseFilename={wtcExportBase}
+                getSvg={getWtcExportSvg}
+                svgWidth={900}
+                svgHeight={340}
+                getCsv={getWtcExportCsv}
+              />
             </div>
           </div>
 

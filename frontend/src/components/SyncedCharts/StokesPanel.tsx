@@ -1,9 +1,15 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import type * as echarts from "echarts";
 import { Eye, EyeOff, Waves } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
+import {
+  buildExportFilename,
+  formatCsvWithMetadata,
+  renderEChartsToSvg,
+} from "../../utils/exportUtils";
 import { formatNum, formatUtcFull } from "../../utils/formatters";
+import { ExportToolbar } from "../Common/ExportToolbar";
 import { CursorOverlayLine } from "./CursorOverlayLine";
 import {
   CHART_GRID_LEFT,
@@ -177,6 +183,7 @@ export const StokesPanel: React.FC = () => {
 
     return {
       animation: false,
+      useUTC: true,
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
@@ -319,6 +326,103 @@ export const StokesPanel: React.FC = () => {
   const s2 = maskedPolarization?.stokes2d ?? null;
   const p3 = polarizationRaw?.pol_3d ?? null;
 
+  const exportBase = buildExportFilename(
+    ["stokes", state.episodeId, state.stationA, state.band, state.method, state.coordFrame],
+    "svg",
+  ).replace(/\.svg$/, "");
+
+  const getExportSvg = useCallback(() => {
+    if (!option) return null;
+    return renderEChartsToSvg(option, {
+      width: 920,
+      height: 360,
+      theme: state.exportTheme,
+      viewRangeMs: state.viewRangeMs,
+      title: `Stokes Polarization ${state.stationA} (${state.band}, ${state.method})`,
+      desc: `${state.episodeId} | ${state.coordFrame} | alpha=${state.alpha}`,
+    });
+  }, [option, state.exportTheme, state.viewRangeMs, state.stationA, state.band, state.method, state.episodeId, state.coordFrame, state.alpha]);
+
+  const getExportCsv = useCallback(() => {
+    const dyn = maskedPolarization?.dynamic;
+    if (!dyn || dyn.timestamps_utc.length === 0) return null;
+    const rows = dyn.timestamps_utc.map((t, i) => [
+      t,
+      dyn.I[i] ?? null,
+      dyn.p[i] ?? null,
+      dyn.p_crit[i] ?? null,
+      dyn.is_significant_p[i] ?? false,
+      maskedPolarization.psiSig[i] ?? null,
+      dyn.psi_deg[i] ?? null,
+      maskedPolarization.chiSig[i] ?? null,
+      dyn.chi_deg[i] ?? null,
+      maskedPolarization.epsSig[i] ?? null,
+      dyn.epsilon[i] ?? null,
+      dyn.gamma2[i] ?? null,
+      dyn.gamma2_crit[i] ?? null,
+      dyn.n_eff[i] ?? null,
+      dyn.is_valid[i] ?? false,
+    ]);
+    return formatCsvWithMetadata(
+      {
+        episode_id: state.episodeId,
+        station_iaga: state.stationA,
+        method: state.method,
+        band: state.band,
+        t_max_pc6_sec: state.band === "Pc6" ? state.tMaxPc6Sec : "",
+        coord_frame: state.coordFrame,
+        d0_deg: polarizationRaw?.d0_deg ?? "",
+        alpha: state.alpha,
+        spectrum_type: state.spectrumType,
+        L: state.L,
+        M: state.M,
+        window_samples: state.windowSamples,
+        step_samples: state.stepSamples,
+        overall_I: s2?.I ?? "",
+        overall_p: s2?.p ?? "",
+        overall_p_crit: s2?.p_crit ?? "",
+        overall_psi_deg: s2?.psi_deg ?? "",
+        overall_epsilon: s2?.epsilon ?? "",
+        overall_3d_P: p3?.P ?? "",
+      },
+      [
+        "timestamp_utc",
+        "I_nT2",
+        "p",
+        "p_crit",
+        "is_significant_p",
+        "psi_deg_masked",
+        "psi_deg_raw",
+        "chi_deg_masked",
+        "chi_deg_raw",
+        "epsilon_masked",
+        "epsilon_raw",
+        "gamma2",
+        "gamma2_crit",
+        "n_eff",
+        "is_valid",
+      ],
+      rows,
+    );
+  }, [
+    maskedPolarization,
+    polarizationRaw,
+    state.episodeId,
+    state.stationA,
+    state.method,
+    state.band,
+    state.tMaxPc6Sec,
+    state.coordFrame,
+    state.alpha,
+    state.spectrumType,
+    state.L,
+    state.M,
+    state.windowSamples,
+    state.stepSamples,
+    s2,
+    p3,
+  ]);
+
   return (
     <section className="panel-card">
       <div className="panel-header">
@@ -350,6 +454,14 @@ export const StokesPanel: React.FC = () => {
             {state.showNoiseGhost ? <Eye size={13} /> : <EyeOff size={13} />}
             <span>{state.showNoiseGhost ? "Скрыть шум p<p_crit" : "Показать шум бледно"}</span>
           </button>
+          <ExportToolbar
+            baseFilename={exportBase}
+            getSvg={getExportSvg}
+            svgWidth={920}
+            svgHeight={360}
+            getCsv={getExportCsv}
+            disabled={!option}
+          />
         </div>
       </div>
 

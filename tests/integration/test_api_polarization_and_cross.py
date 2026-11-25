@@ -153,6 +153,7 @@ def test_network_snapshot_handles_baseless_and_absent_stations(api_client):
     assert r.status_code == 200
     by_code = {s["station_iaga"]: s for s in r.json()["stations"]}
     assert by_code["LVV"]["is_valid"] is True
+    assert math.isfinite(by_code["LVV"]["d0_deg"]) and abs(by_code["LVV"]["d0_deg"]) > 0.1
     assert by_code["BEL"]["is_valid"] is True
     assert by_code["GCK"]["available"] is True and by_code["GCK"]["is_valid"] is False
     assert by_code["SUA"]["available"] is False and by_code["SUA"]["is_valid"] is False
@@ -220,6 +221,25 @@ def test_cross_welch_pair_matrix_and_flr_with_phase1_cache(api_client):
     assert len(ms_data["window_timestamps_utc"]) == 1
     assert ms_data["window_timestamps_utc"][0] == m2["window_timestamps_utc"][3]
     assert ms_data["gamma2"][0] == m2["gamma2"][3]
+    assert "phase_deg" in ms_data
+    assert len(ms_data["phase_deg"]) == 1
+    n_st = len(ms_data["station_codes"])
+    assert len(ms_data["phase_deg"][0]) == n_st
+    assert any(
+        ms_data["phase_deg"][0][i][j] is not None
+        and -180.0 <= ms_data["phase_deg"][0][i][j] <= 180.0
+        and ms_data["phase_deg_masked"][0][i][j] is None
+        and not ms_data["is_significant"][0][i][j]
+        for i in range(n_st)
+        for j in range(n_st)
+        if i != j and ms_data["gamma2"][0][i][j] is not None
+    )
+    assert all(
+        ms_data["phase_deg"][0][i][j] == ms_data["phase_deg_masked"][0][i][j]
+        for i in range(n_st)
+        for j in range(n_st)
+        if ms_data["is_significant"][0][i][j]
+    )
     assert (
         client.post(
             "/api/cross/welch/matrix",

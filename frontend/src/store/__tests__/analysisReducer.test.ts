@@ -76,8 +76,10 @@ describe("analysisReducer & state guards", () => {
       type: "SET_VIEW_RANGE",
       rangeMs: [Date.parse("2026-10-10T00:00:00Z"), Date.parse("2026-10-10T12:00:00Z")],
     });
+    const s5 = analysisReducer(s4, { type: "SET_EXPORT_THEME", theme: "dark" });
 
-    expect(selectBackendFetchSignature(s4)).toBe(sig0);
+    expect(s5.exportTheme).toBe("dark");
+    expect(selectBackendFetchSignature(s5)).toBe(sig0);
 
     const sMethod = analysisReducer(s4, { type: "SET_METHOD", method: "variant_b_sos" });
     expect(selectBackendFetchSignature(sMethod)).not.toBe(sig0);

@@ -764,7 +764,7 @@ def compute_network_snapshot(
             continue
 
         try:
-            xyz, _, canon_frame = store.apply_coord_frame(
+            xyz, d0_deg, _ = store.apply_coord_frame(
                 data, coord_frame=req.coord_frame
             )
         except ValueError as exc:
@@ -798,6 +798,7 @@ def compute_network_snapshot(
                     has_baseline=bool(meta["has_baseline"]),
                     available=True,
                     is_valid=False,
+                    d0_deg=float(d0_deg),
                     warning="Insufficient valid Welch segments in selected window.",
                 )
             )
@@ -826,6 +827,7 @@ def compute_network_snapshot(
                 has_baseline=bool(meta["has_baseline"]),
                 available=True,
                 is_valid=True,
+                d0_deg=float(d0_deg),
                 stokes_2d=_stokes_to_schema(st),
             )
         )

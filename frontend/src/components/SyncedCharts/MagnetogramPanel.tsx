@@ -1,10 +1,16 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import type * as echarts from "echarts";
 import { Activity, AlertTriangle } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
+import {
+  buildExportFilename,
+  formatCsvWithMetadata,
+  renderEChartsToSvg,
+} from "../../utils/exportUtils";
 import { formatUtcFull } from "../../utils/formatters";
 import { extractContiguousRanges } from "../../utils/masking";
+import { ExportToolbar } from "../Common/ExportToolbar";
 import { CursorOverlayLine } from "./CursorOverlayLine";
 import { CHART_GRID_LEFT, CHART_GRID_RIGHT, useSyncedEChart } from "./useSyncedEChart";
 
@@ -161,6 +167,7 @@ export const MagnetogramPanel: React.FC = () => {
 
     return {
       animation: false,
+      useUTC: true,
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
@@ -228,6 +235,78 @@ export const MagnetogramPanel: React.FC = () => {
     onCursorChange: setCursorUtcMs,
   });
 
+  const exportBase = buildExportFilename(
+    ["magnetogram", state.episodeId, state.stationA, state.coordFrame, showFiltered ? state.band : "raw"],
+    "svg",
+  ).replace(/\.svg$/, "");
+
+  const getExportSvg = useCallback(() => {
+    if (!option) return null;
+    return renderEChartsToSvg(option, {
+      width: 920,
+      height: 260,
+      theme: state.exportTheme,
+      viewRangeMs: state.viewRangeMs,
+      title: `Magnetogram ${state.stationA} (${state.coordFrame})`,
+      desc: `${state.episodeId} | ${showFiltered ? `${state.band} filtered` : "raw XYZ"}`,
+    });
+  }, [option, state.exportTheme, state.viewRangeMs, state.stationA, state.coordFrame, state.episodeId, showFiltered, state.band]);
+
+  const getExportCsv = useCallback(() => {
+    if (!geomag || !geomag.available) return null;
+    const flt = polarizationRaw?.filtered ?? null;
+    const cols = [
+      "timestamp_utc",
+      "x_nT",
+      "y_nT",
+      "z_nT",
+      "f_scalar_nT",
+      "is_valid_xyz",
+      "is_interpolated",
+      "was_despiked",
+    ];
+    if (flt) {
+      cols.push("x_filt", "y_filt", "z_filt", "x_amp", "y_amp", "usable_mask");
+    }
+    const rows = geomag.timestamps_utc.map((t, i) => {
+      const base: Array<string | number | boolean | null> = [
+        t,
+        geomag.x_nT[i] ?? null,
+        geomag.y_nT[i] ?? null,
+        geomag.z_nT[i] ?? null,
+        geomag.f_scalar_nT[i] ?? null,
+        geomag.is_valid_xyz[i] ?? false,
+        geomag.is_interpolated[i] ?? false,
+        geomag.was_despiked[i] ?? false,
+      ];
+      if (flt) {
+        base.push(
+          flt.x_filt[i] ?? null,
+          flt.y_filt[i] ?? null,
+          flt.z_filt[i] ?? null,
+          flt.x_amp[i] ?? null,
+          flt.y_amp[i] ?? null,
+          flt.usable_mask[i] ?? false,
+        );
+      }
+      return base;
+    });
+    return formatCsvWithMetadata(
+      {
+        episode_id: geomag.episode_id,
+        station_iaga: geomag.station_iaga,
+        coord_frame: geomag.coord_frame,
+        d0_deg: geomag.d0_deg,
+        valid_pct: geomag.valid_pct,
+        method: state.method,
+        band: state.band,
+        trim_hours: polarizationRaw?.trim_hours ?? "",
+      },
+      cols,
+      rows,
+    );
+  }, [geomag, polarizationRaw, state.method, state.band]);
+
   return (
     <section className="panel-card">
       <div className="panel-header">
@@ -268,6 +347,14 @@ export const MagnetogramPanel: React.FC = () => {
             </span>
           )}
           {loadingPolarization && <span className="pill">Расчёт…</span>}
+          <ExportToolbar
+            baseFilename={exportBase}
+            getSvg={getExportSvg}
+            svgWidth={920}
+            svgHeight={260}
+            getCsv={getExportCsv}
+            disabled={!option}
+          />
         </div>
       </div>
 

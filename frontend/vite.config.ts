@@ -12,6 +12,7 @@ export default defineConfig({
         manualChunks: {
           "react-vendor": ["react", "react-dom"],
           echarts: ["echarts"],
+          "d3-geo": ["d3-geo", "topojson-client"],
         },
       },
     },

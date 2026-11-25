@@ -1,10 +1,17 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as echarts from "echarts";
 import { ArrowLeftRight, ChevronDown, ChevronUp, Database, GitBranch } from "lucide-react";
 import type { CrossComponent } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
+import {
+  buildExportFilename,
+  buildHeatmapPublicationSvg,
+  formatCsvWithMetadata,
+  renderEChartsToSvg,
+} from "../../utils/exportUtils";
 import { formatNum, formatUtcFull } from "../../utils/formatters";
+import { ExportToolbar } from "../Common/ExportToolbar";
 import { CursorOverlayLine } from "../SyncedCharts/CursorOverlayLine";
 import { ScientificHeatmap2D, type BandGuide } from "../SyncedCharts/ScientificHeatmap2D";
 import {
@@ -48,6 +55,7 @@ export const WelchCrossPanel: React.FC = () => {
 
     return {
       animation: false,
+      useUTC: true,
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
@@ -189,14 +197,9 @@ export const WelchCrossPanel: React.FC = () => {
   });
 
   // Separate non-time ECharts chart for Meridional FLR profile (callback-ref safe)
-  const [flrHostEl, setFlrHostEl] = useState<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!flrHostEl || !flrProfile || !flrOpen) return;
-    const chart = echarts.init(flrHostEl);
-    const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(flrHostEl);
-
-    chart.setOption({
+  const flrOption = useMemo<echarts.EChartsCoreOption | null>(() => {
+    if (!flrProfile) return null;
+    return {
       animation: false,
       backgroundColor: "transparent",
       tooltip: {
@@ -256,18 +259,161 @@ export const WelchCrossPanel: React.FC = () => {
           data: flrProfile.cumulative_phase_deg,
         },
       ],
-    });
+    };
+  }, [flrProfile]);
+
+  const [flrHostEl, setFlrHostEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!flrHostEl || !flrOption || !flrOpen) return;
+    const chart = echarts.init(flrHostEl);
+    const ro = new ResizeObserver(() => chart.resize());
+    ro.observe(flrHostEl);
+    chart.setOption(flrOption);
 
     return () => {
       ro.disconnect();
       chart.dispose();
     };
-  }, [flrHostEl, flrProfile, flrOpen]);
+  }, [flrHostEl, flrOption, flrOpen]);
 
   const bandGuides = useMemo<BandGuide[]>(
     () => [{ value: 1 / 600, label: "600с", color: "rgba(248, 250, 252, 0.72)" }],
     [],
   );
+
+  const pairExportBase = buildExportFilename(
+    ["welch_pair", state.episodeId, state.stationA, state.stationB, state.crossComponent, state.band],
+    "svg",
+  ).replace(/\.svg$/, "");
+
+  const getPairExportSvg = useCallback(() => {
+    if (!option1D) return null;
+    return renderEChartsToSvg(option1D, {
+      width: 920,
+      height: 260,
+      theme: state.exportTheme,
+      viewRangeMs: state.viewRangeMs,
+      title: `Welch Cross-Spectrum ${state.stationA}-${state.stationB} (${state.crossComponent}, ${state.band})`,
+      desc: `${state.episodeId} | alpha=${state.alpha}`,
+    });
+  }, [option1D, state.exportTheme, state.viewRangeMs, state.stationA, state.stationB, state.crossComponent, state.band, state.episodeId, state.alpha]);
+
+  const getPairExportCsv = useCallback(() => {
+    if (!welchPairRaw || !welchPairRaw.available || !maskedWelch) return null;
+    const rows = welchPairRaw.window_timestamps_utc.map((t, i) => [
+      t,
+      welchPairRaw.K_ij[i] ?? null,
+      welchPairRaw.n_eff[i] ?? null,
+      welchPairRaw.gamma2[i] ?? null,
+      maskedWelch.gamma2Crit[i] ?? null,
+      maskedWelch.isSignificant[i] ?? false,
+      welchPairRaw.phase_deg[i] ?? null,
+      maskedWelch.phaseDegMasked[i] ?? null,
+      maskedWelch.azimuthalMMasked[i] ?? null,
+    ]);
+    return formatCsvWithMetadata(
+      {
+        episode_id: welchPairRaw.episode_id,
+        station_i: welchPairRaw.station_i,
+        station_j: welchPairRaw.station_j,
+        component: welchPairRaw.component,
+        coord_frame: welchPairRaw.coord_frame,
+        band: welchPairRaw.band,
+        alpha: state.alpha,
+        delta_lon_deg: welchPairRaw.azimuthal?.delta_lon_deg ?? "",
+        m_alias: welchPairRaw.azimuthal?.m_alias ?? "",
+      },
+      [
+        "timestamp_utc",
+        "K_ij",
+        "n_eff",
+        "gamma2",
+        "gamma2_crit",
+        "is_significant",
+        "phase_deg_raw",
+        "phase_deg_masked",
+        "azimuthal_m_masked",
+      ],
+      rows,
+    );
+  }, [welchPairRaw, maskedWelch, state.alpha]);
+
+  const getTfHeatmapSvg = useCallback(() => {
+    if (!welchPairRaw || !welchPairRaw.available || !maskedWelch || welchPairRaw.freqs_hz.length === 0) {
+      return null;
+    }
+    return buildHeatmapPublicationSvg({
+      title: `Welch 2D ${tfMode === "coherence" ? "Coherence" : "Phase"} (${welchPairRaw.station_i}-${welchPairRaw.station_j})`,
+      subtitle: `${welchPairRaw.episode_id} | ${welchPairRaw.component} | alpha=${state.alpha}`,
+      theme: state.exportTheme,
+      width: 900,
+      height: 290,
+      timestampsUtc: welchPairRaw.window_timestamps_utc,
+      yValues: welchPairRaw.freqs_hz,
+      yLabel: "Frequency [Hz]",
+      yScaleMode: "linear",
+      zMatrix: tfMode === "coherence" ? welchPairRaw.gamma2_tf : maskedWelch.phaseDegTfMasked,
+      matrixLayout: "time-by-y",
+      zMin: tfMode === "coherence" ? 0 : -180,
+      zMax: tfMode === "coherence" ? 1 : 180,
+      zUnit: tfMode === "coherence" ? "gamma2" : "deg",
+      colormap: tfMode === "coherence" ? "turbo" : "phase",
+      viewRangeMs: state.viewRangeMs,
+      bandGuidesY: bandGuides,
+    });
+  }, [welchPairRaw, maskedWelch, tfMode, state.alpha, state.exportTheme, state.viewRangeMs, bandGuides]);
+
+  const getFlrExportSvg = useCallback(() => {
+    if (!flrOption || !flrProfile) return null;
+    return renderEChartsToSvg(flrOption, {
+      width: 880,
+      height: 260,
+      theme: state.exportTheme,
+      title: `Meridional FLR Profile (${flrProfile.band})`,
+      desc: `${flrProfile.episode_id} | ${flrProfile.window_timestamp_utc} | peak=${flrProfile.peak_station}`,
+    });
+  }, [flrOption, flrProfile, state.exportTheme]);
+
+  const getFlrExportCsv = useCallback(() => {
+    if (!flrProfile) return null;
+    const rows = flrProfile.station_codes.map((code, i) => [
+      code,
+      flrProfile.latitudes_deg[i] ?? null,
+      flrProfile.band_power[i] ?? null,
+      flrProfile.amplitude[i] ?? null,
+      flrProfile.cumulative_phase_deg[i] ?? null,
+      i < flrProfile.pair_coherence.length ? (flrProfile.pair_coherence[i] ?? null) : null,
+      i < flrProfile.pair_gamma2_crit.length ? (flrProfile.pair_gamma2_crit[i] ?? null) : null,
+      i < flrProfile.pair_phase_deg.length ? (flrProfile.pair_phase_deg[i] ?? null) : null,
+      i < flrProfile.pair_is_significant.length ? flrProfile.pair_is_significant[i] : null,
+      i < flrProfile.phase_gradient_deg_per_lat.length
+        ? (flrProfile.phase_gradient_deg_per_lat[i] ?? null)
+        : null,
+    ]);
+    return formatCsvWithMetadata(
+      {
+        episode_id: flrProfile.episode_id,
+        band: flrProfile.band,
+        window_timestamp_utc: flrProfile.window_timestamp_utc,
+        alpha: state.alpha,
+        peak_station: flrProfile.peak_station,
+        peak_latitude_deg: flrProfile.peak_latitude_deg ?? "",
+      },
+      [
+        "station_code",
+        "latitude_deg",
+        "band_power",
+        "amplitude",
+        "cumulative_phase_deg",
+        "pair_coherence_to_next",
+        "pair_gamma2_crit",
+        "pair_phase_deg",
+        "pair_is_significant",
+        "phase_gradient_deg_per_lat",
+      ],
+      rows,
+    );
+  }, [flrProfile, state.alpha]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -335,6 +481,14 @@ export const WelchCrossPanel: React.FC = () => {
             </span>
           )}
           {loadingWelch && <span className="pill">Расчёт Уэлча…</span>}
+          <ExportToolbar
+            baseFilename={pairExportBase}
+            getSvg={getPairExportSvg}
+            svgWidth={920}
+            svgHeight={260}
+            getCsv={getPairExportCsv}
+            disabled={!option1D}
+          />
         </div>
       </div>
 
@@ -368,21 +522,29 @@ export const WelchCrossPanel: React.FC = () => {
               2D частотно-временная карта пары ({welchPairRaw.station_i}–{welchPairRaw.station_j}),
               α = {state.alpha}
             </span>
-            <div className="segmented" style={{ width: 290 }}>
-              <button
-                type="button"
-                className={tfMode === "coherence" ? "active" : ""}
-                onClick={() => setTfMode("coherence")}
-              >
-                Когерентность γ²(t, f)
-              </button>
-              <button
-                type="button"
-                className={tfMode === "phase" ? "active" : ""}
-                onClick={() => setTfMode("phase")}
-              >
-                Фаза Δφ(t, f) (α-маска)
-              </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div className="segmented" style={{ width: 290 }}>
+                <button
+                  type="button"
+                  className={tfMode === "coherence" ? "active" : ""}
+                  onClick={() => setTfMode("coherence")}
+                >
+                  Когерентность γ²(t, f)
+                </button>
+                <button
+                  type="button"
+                  className={tfMode === "phase" ? "active" : ""}
+                  onClick={() => setTfMode("phase")}
+                >
+                  Фаза Δφ(t, f) (α-маска)
+                </button>
+              </div>
+              <ExportToolbar
+                baseFilename={`${pairExportBase}_${tfMode}_2d`}
+                getSvg={getTfHeatmapSvg}
+                svgWidth={900}
+                svgHeight={290}
+              />
             </div>
           </div>
 
@@ -462,12 +624,33 @@ export const WelchCrossPanel: React.FC = () => {
 
         {flrOpen && flrProfile && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
-              <span className="pill pill-accent mono">Окно: {flrProfile.window_timestamp_utc}</span>
-              <span className="pill mono">α = {state.alpha}</span>
-              <span className="pill pill-ok mono">
-                Пик амплитуды: {flrProfile.peak_station} ({formatNum(flrProfile.peak_latitude_deg, 2)}°N)
-              </span>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+                marginBottom: 6,
+              }}
+            >
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <span className="pill pill-accent mono">Окно: {flrProfile.window_timestamp_utc}</span>
+                <span className="pill mono">α = {state.alpha}</span>
+                <span className="pill pill-ok mono">
+                  Пик амплитуды: {flrProfile.peak_station} ({formatNum(flrProfile.peak_latitude_deg, 2)}°N)
+                </span>
+              </div>
+              <ExportToolbar
+                baseFilename={buildExportFilename(
+                  ["flr_profile", flrProfile.episode_id, flrProfile.band, flrProfile.window_timestamp_utc],
+                  "svg",
+                ).replace(/\.svg$/, "")}
+                getSvg={getFlrExportSvg}
+                svgWidth={880}
+                svgHeight={260}
+                getCsv={getFlrExportCsv}
+              />
             </div>
             <div ref={setFlrHostEl} style={{ width: "100%", height: 220 }} />
           </div>

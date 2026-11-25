@@ -302,6 +302,7 @@ export interface NetworkStationSnapshot {
   has_baseline: boolean;
   available: boolean;
   is_valid: boolean;
+  d0_deg?: number;
   stokes_2d: Stokes2DOut | null;
   warning: string | null;
 }
@@ -396,6 +397,7 @@ export interface WelchMatrixResponse {
   window_timestamps_utc: string[];
   gamma2: (number | null)[][][];
   gamma2_crit: (number | null)[][][];
+  phase_deg?: (number | null)[][][];
   phase_deg_masked: (number | null)[][][];
   K_ij: number[][][];
   is_significant: boolean[][][];

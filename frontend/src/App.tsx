@@ -6,6 +6,7 @@ import { AuthGate } from "./components/Layout/AuthGate";
 import { ControlSidebar } from "./components/Layout/ControlSidebar";
 import { TimeScrubberBar } from "./components/Layout/TimeScrubberBar";
 import { TopBar } from "./components/Layout/TopBar";
+import { StationMapPanel } from "./components/StationMap/StationMapPanel";
 import { MagnetogramPanel } from "./components/SyncedCharts/MagnetogramPanel";
 import { SpaceWeatherPanel } from "./components/SyncedCharts/SpaceWeatherPanel";
 import { StokesPanel } from "./components/SyncedCharts/StokesPanel";
@@ -66,6 +67,7 @@ const Workbench: React.FC = () => {
               </div>
             )}
 
+            <StationMapPanel />
             <SpaceWeatherPanel />
             <MagnetogramPanel />
             <StokesPanel />

@@ -1,0 +1,225 @@
+{
+  "model": {
+    "name": "centered_dipole_igrf14",
+    "epoch": 2026.78,
+    "pole_lat_deg": 80.86,
+    "pole_lon_deg": -72.83,
+    "solar_algorithm": "noaa_meeus",
+    "note": "Shared Python (geomag_core.mlt) and TypeScript (astronomy.ts) reference checkpoints without AACGM."
+  },
+  "subsolar_cases": [
+    {
+      "id": "june_solstice_2026",
+      "utc_iso": "2026-06-21T12:00:00Z",
+      "declination_deg": 23.4380516632,
+      "lon_deg": 0.4560699995,
+      "eot_min": -1.824279998,
+      "julian_date": 2461213.0
+    },
+    {
+      "id": "dec_solstice_2026",
+      "utc_iso": "2026-12-21T12:00:00Z",
+      "declination_deg": -23.4373089736,
+      "lon_deg": -0.4807419514,
+      "eot_min": 1.9229678055,
+      "julian_date": 2461396.0
+    },
+    {
+      "id": "vernal_equinox_2026",
+      "utc_iso": "2026-03-20T15:00:00Z",
+      "declination_deg": 0.0061102259,
+      "lon_deg": -43.1510075937,
+      "eot_min": -7.3959696252,
+      "julian_date": 2461120.125
+    },
+    {
+      "id": "storm1_oct04_06z",
+      "utc_iso": "2026-10-04T06:00:00Z",
+      "declination_deg": -4.3667464746,
+      "lon_deg": 87.1997643544,
+      "eot_min": 11.2009425825,
+      "julian_date": 2461317.75
+    },
+    {
+      "id": "storm2_oct10_00z",
+      "utc_iso": "2026-10-10T00:00:00Z",
+      "declination_deg": -6.5660426883,
+      "lon_deg": 176.7806995238,
+      "eot_min": 12.877201905,
+      "julian_date": 2461323.5
+    },
+    {
+      "id": "storm2_oct10_12z",
+      "utc_iso": "2026-10-10T12:00:00Z",
+      "declination_deg": -6.7552913053,
+      "lon_deg": -3.2529864071,
+      "eot_min": 13.0119456283,
+      "julian_date": 2461324.0
+    },
+    {
+      "id": "storm2_oct10_18z",
+      "utc_iso": "2026-10-10T18:00:00Z",
+      "declination_deg": -6.8497751863,
+      "lon_deg": -93.2696470953,
+      "eot_min": 13.0785883813,
+      "julian_date": 2461324.25
+    },
+    {
+      "id": "storm3_oct22_1530z",
+      "utc_iso": "2026-10-22T15:30:00Z",
+      "declination_deg": -11.2055156318,
+      "lon_deg": -56.3976496192,
+      "eot_min": 15.5905984767,
+      "julian_date": 2461336.1458333335
+    },
+    {
+      "id": "storm4_oct31_2315z",
+      "utc_iso": "2026-10-31T23:15:00Z",
+      "declination_deg": -14.3510976587,
+      "lon_deg": -172.8634334965,
+      "eot_min": 16.4537339858,
+      "julian_date": 2461345.46875
+    }
+  ],
+  "dipole_cases": [
+    {
+      "station": "NMP",
+      "lat_deg": 80.86,
+      "lon_deg": -72.83,
+      "mlat_deg": 90.0,
+      "mlon_deg": 0.0
+    },
+    {
+      "station": "VIC",
+      "lat_deg": 48.52,
+      "lon_deg": -123.42,
+      "mlat_deg": 53.7525900397,
+      "mlon_deg": -59.9410809351
+    },
+    {
+      "station": "OTT",
+      "lat_deg": 45.403,
+      "lon_deg": -75.552,
+      "mlat_deg": 54.5305729559,
+      "mlon_deg": -3.2941531926
+    },
+    {
+      "station": "RES",
+      "lat_deg": 74.69,
+      "lon_deg": -94.895,
+      "mlat_deg": 82.3653823898,
+      "mlon_deg": -48.2964438957
+    },
+    {
+      "station": "GUI",
+      "lat_deg": 28.3,
+      "lon_deg": -16.4,
+      "mlat_deg": 33.0524096507,
+      "mlon_deg": 61.0764492294
+    },
+    {
+      "station": "LVV",
+      "lat_deg": 49.9,
+      "lon_deg": 23.8,
+      "mlat_deg": 48.021514298,
+      "mlon_deg": 106.9442019599
+    },
+    {
+      "station": "HRN",
+      "lat_deg": 77.0,
+      "lon_deg": 15.55,
+      "mlat_deg": 74.3672771975,
+      "mlon_deg": 123.4406090151
+    },
+    {
+      "station": "IZN",
+      "lat_deg": 40.5,
+      "lon_deg": 29.7,
+      "mlat_deg": 37.9516985476,
+      "mlon_deg": 109.7177226658
+    }
+  ],
+  "mlt_cases": [
+    {
+      "station": "LVV",
+      "lat_deg": 49.9,
+      "lon_deg": 23.8,
+      "utc_iso": "2026-10-10T11:00:00Z",
+      "mlt_hours": 13.5576627247,
+      "sector": "afternoon",
+      "solar_elevation_deg": 32.3988203728
+    },
+    {
+      "station": "OTT",
+      "lat_deg": 45.403,
+      "lon_deg": -75.552,
+      "utc_iso": "2026-10-10T11:00:00Z",
+      "mlt_hours": 6.2084390479,
+      "sector": "morning",
+      "solar_elevation_deg": -2.9085011063
+    },
+    {
+      "station": "VIC",
+      "lat_deg": 48.52,
+      "lon_deg": -123.42,
+      "utc_iso": "2026-10-10T11:00:00Z",
+      "mlt_hours": 2.4319771984,
+      "sector": "morning",
+      "solar_elevation_deg": -33.6707632891
+    },
+    {
+      "station": "HRN",
+      "lat_deg": 77.0,
+      "lon_deg": 15.55,
+      "utc_iso": "2026-10-10T11:00:00Z",
+      "mlt_hours": 14.6574231951,
+      "sector": "afternoon",
+      "solar_elevation_deg": 6.2321536919
+    },
+    {
+      "station": "LVV",
+      "lat_deg": 49.9,
+      "lon_deg": 23.8,
+      "utc_iso": "2026-10-10T22:30:00Z",
+      "mlt_hours": 0.9212739029,
+      "sector": "morning",
+      "solar_elevation_deg": -46.8490931717
+    },
+    {
+      "station": "LVV",
+      "lat_deg": 49.9,
+      "lon_deg": 23.8,
+      "utc_iso": "2026-10-04T10:15:00Z",
+      "mlt_hours": 12.7639905966,
+      "sector": "afternoon",
+      "solar_elevation_deg": 35.6640793096
+    },
+    {
+      "station": "GUI",
+      "lat_deg": 28.3,
+      "lon_deg": -16.4,
+      "utc_iso": "2026-10-22T12:45:00Z",
+      "mlt_hours": 12.304248479,
+      "sector": "afternoon",
+      "solar_elevation_deg": 50.5161181157
+    },
+    {
+      "station": "RES",
+      "lat_deg": 74.69,
+      "lon_deg": -94.895,
+      "utc_iso": "2026-10-31T18:00:00Z",
+      "mlt_hours": 10.1603868428,
+      "sector": "morning",
+      "solar_elevation_deg": 1.0278720848
+    },
+    {
+      "station": "IZN",
+      "lat_deg": 40.5,
+      "lon_deg": 29.7,
+      "utc_iso": "2026-10-09T09:00:00Z",
+      "mlt_hours": 11.7512539818,
+      "sector": "morning",
+      "solar_elevation_deg": 41.8607594842
+    }
+  ]
+}

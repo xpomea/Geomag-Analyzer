@@ -90,6 +90,7 @@ function makeBaseContext(overrides: Partial<AnalysisContextValue> = {}): Analysi
     polarizationRaw: null,
     maskedPolarization: null,
     welchPairRaw: null,
+    welchPairSig: null,
     maskedWelch: null,
     flrProfile: null,
     wtcResult: null,
@@ -339,6 +340,7 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     expect(mockCharts).toHaveLength(1);
     expect(mockCharts[0].disposed).toBe(false);
     expect(mockCharts[0].setOptionCalls).toBe(1);
+    expect((mockCharts[0].lastOption as { useUTC?: boolean }).useUTC).toBe(true);
   });
 
   it("initializes WelchCrossPanel 1D ECharts cleanly when welchPairRaw finishes loading", () => {
@@ -368,6 +370,7 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     expect(mockCharts).toHaveLength(1);
     expect(mockCharts[0].disposed).toBe(false);
     expect(mockCharts[0].setOptionCalls).toBe(1);
+    expect((mockCharts[0].lastOption as { useUTC?: boolean }).useUTC).toBe(true);
   });
 
   it("disposes and re-initializes MagnetogramPanel ECharts across LVV -> SUA (absent) -> LVV", () => {
@@ -403,6 +406,7 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     expect(mockCharts[1].disposed).toBe(false);
     expect(mockCharts[1].el).not.toBe(firstDiv);
     expect(mockCharts[1].setOptionCalls).toBe(1);
+    expect((mockCharts[1].lastOption as { useUTC?: boolean }).useUTC).toBe(true);
   });
 
   it("initializes SpaceWeatherPanel and disposes cleanly on unmount", () => {
@@ -420,6 +424,7 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     });
     expect(mockCharts).toHaveLength(1);
     expect(mockCharts[0].setOptionCalls).toBe(1);
+    expect((mockCharts[0].lastOption as { useUTC?: boolean }).useUTC).toBe(true);
 
     act(() => {
       root.unmount();
@@ -688,6 +693,25 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     expect(flrAborted[0]).toBe(true);
     expect(latestCtx.flrProfile?.peak_station).toBe("BEL");
     expect(latestCtx.flrError).toBeNull();
+
+    // Regression F-04: loadFlrAtCursor() without override computes non-zero cursor window_index even when welchPairRaw is null
+    let lastFlrWindowIdx: number | undefined;
+    const flrCheckFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/cross/welch/flr") && init?.body) {
+        const parsed = JSON.parse(String(init.body)) as { window_index?: number };
+        lastFlrWindowIdx = parsed.window_index;
+      }
+      return fetchMock(input, init);
+    });
+    vi.stubGlobal("fetch", flrCheckFetch);
+    act(() => {
+      triggerCursor(Date.UTC(2026, 9, 10, 9, 0));
+    });
+    await act(async () => {
+      await latestCtx.loadFlrAtCursor();
+    });
+    expect(lastFlrWindowIdx).toBe(60);
 
     vi.unstubAllGlobals();
   });

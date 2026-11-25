@@ -304,6 +304,7 @@ def cross_welch_matrix(
         window_timestamps_utc=win_ts,
         gamma2=to_json_list(mat.gamma2),
         gamma2_crit=to_json_list(mat.gamma2_crit),
+        phase_deg=to_json_list(mat.phase_deg),
         phase_deg_masked=to_json_list(mat.phase_deg_masked),
         K_ij=to_json_list(mat.K_ij),
         is_significant=to_json_list(mat.is_significant),

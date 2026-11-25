@@ -7,6 +7,8 @@ import type {
   JobStatusResponse,
   MeridionalFLRRequest,
   MeridionalFLRResponse,
+  NetworkSnapshotRequest,
+  NetworkSnapshotResponse,
   PolarizationRequest,
   PolarizationResponse,
   SessionResponse,
@@ -237,6 +239,17 @@ export function computePolarization(
   signal?: AbortSignal,
 ): Promise<PolarizationResponse> {
   return requestJson<PolarizationResponse>("/api/polarization", {
+    method: "POST",
+    body: JSON.stringify(req),
+    signal,
+  });
+}
+
+export function computeNetworkSnapshot(
+  req: NetworkSnapshotRequest,
+  signal?: AbortSignal,
+): Promise<NetworkSnapshotResponse> {
+  return requestJson<NetworkSnapshotResponse>("/api/polarization/network-snapshot", {
     method: "POST",
     body: JSON.stringify(req),
     signal,

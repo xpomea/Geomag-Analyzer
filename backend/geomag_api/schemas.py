@@ -280,6 +280,7 @@ class NetworkStationSnapshot(BaseModel):
     has_baseline: bool
     available: bool
     is_valid: bool
+    d0_deg: float = 0.0
     stokes_2d: Stokes2DOut | None = None
     warning: str | None = None
 
@@ -375,6 +376,7 @@ class WelchMatrixResponse(BaseModel):
     window_timestamps_utc: list[str]
     gamma2: list[list[list[float | None]]]
     gamma2_crit: list[list[list[float | None]]]
+    phase_deg: list[list[list[float | None]]] = Field(default_factory=list)
     phase_deg_masked: list[list[list[float | None]]]
     K_ij: list[list[list[int]]]
     is_significant: list[list[list[bool]]]

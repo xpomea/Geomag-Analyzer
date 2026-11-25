@@ -29,6 +29,8 @@ export const MIN_ZOOM_SPAN_MS = 30 * 60_000;
 
 export type CrossPanelTab = "spectrogram" | "welch" | "wtc";
 
+export type ExportTheme = "light" | "dark";
+
 export interface AnalysisState {
   episodeId: string;
   stationA: string;
@@ -62,6 +64,7 @@ export interface AnalysisState {
   cursorUtcMs: number | null;
   showFilteredMagnetogram: boolean;
   showNoiseGhost: boolean;
+  exportTheme: ExportTheme;
 
   crossComponent: CrossComponent;
   activeCrossTab: CrossPanelTab;
@@ -107,6 +110,7 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
   cursorUtcMs: null,
   showFilteredMagnetogram: false,
   showNoiseGhost: false,
+  exportTheme: "light",
 
   crossComponent: "X",
   activeCrossTab: "spectrogram",
@@ -166,7 +170,8 @@ export type AnalysisAction =
   | { type: "SET_JOB_TRANSPORT"; jobId: string; transport: "ws" | "sse" }
   | { type: "SET_CACHE_ENTRIES"; entries: CacheEntryOut[] }
   | { type: "SET_JOB_DRAWER_OPEN"; open: boolean }
-  | { type: "SET_SERVER_STATUS"; status: "running" | "shutting_down" | "stopped" };
+  | { type: "SET_SERVER_STATUS"; status: "running" | "shutting_down" | "stopped" }
+  | { type: "SET_EXPORT_THEME"; theme: ExportTheme };
 
 export function clampViewRange(
   rangeMs: [number, number],
@@ -417,6 +422,9 @@ export function analysisReducer(
 
     case "SET_SERVER_STATUS":
       return { ...state, serverStatus: action.status };
+
+    case "SET_EXPORT_THEME":
+      return { ...state, exportTheme: action.theme };
 
     default:
       return state;

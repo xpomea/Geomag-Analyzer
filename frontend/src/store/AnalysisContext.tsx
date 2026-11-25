@@ -49,6 +49,8 @@ import {
   applyFlrAlphaMask,
   applyPolarizationAlphaMask,
   applyWelchAlphaMask,
+  buildWelchPairRequestSignature,
+  computeCursorWindowIndex,
   type MaskedPolarizationView,
   type MaskedWelchView,
 } from "../utils/masking";
@@ -85,6 +87,7 @@ export interface AnalysisContextValue {
   polarizationRaw: PolarizationResponse | null;
   maskedPolarization: MaskedPolarizationView | null;
   welchPairRaw: WelchPairResponse | null;
+  welchPairSig?: string | null;
   maskedWelch: MaskedWelchView | null;
   flrProfile: MeridionalFLRResponse | null;
   wtcResult: WTCResultResponse | null;
@@ -130,6 +133,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [rawSpaceWeather, setRawSpaceWeather] = useState<SpaceWeatherResponse | null>(null);
   const [polarizationRaw, setPolarizationRaw] = useState<PolarizationResponse | null>(null);
   const [welchPairRaw, setWelchPairRaw] = useState<WelchPairResponse | null>(null);
+  const [welchPairSig, setWelchPairSig] = useState<string | null>(null);
   const [flrProfileRaw, setFlrProfileRaw] = useState<MeridionalFLRResponse | null>(null);
   const [wtcResult, setWtcResult] = useState<WTCResultResponse | null>(null);
 
@@ -459,11 +463,29 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return applyPolarizationAlphaMask(polarizationRaw, state.alpha);
   }, [polarizationRaw, state.alpha]);
 
+  const currentWelchSig = useMemo(() => buildWelchPairRequestSignature(state), [
+    state.episodeId,
+    state.stationA,
+    state.stationB,
+    state.crossComponent,
+    state.coordFrame,
+    state.externalD0Deg,
+    state.externalD0DegB,
+    state.band,
+    state.tMaxPc6Sec,
+    state.L,
+    state.M,
+    state.windowSamples,
+    state.stepSamples,
+    state.spectrumType,
+  ]);
+
   // 7. Fetch Welch pair when cross Welch tab is active (alpha NOT in deps!)
   useEffect(() => {
     if (!auth.checked || !auth.authenticated || !catalog) return;
     if (state.activeCrossTab !== "welch") return;
 
+    const reqSig = currentWelchSig;
     const warnA = getStationBaselineWarning(
       stationMetaMap.get(state.stationA),
       state.coordFrame,
@@ -476,6 +498,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     if (warnA || warnB) {
       setWelchPairRaw(null);
+      setWelchPairSig(null);
       setWelchError(warnA ?? warnB);
       return;
     }
@@ -506,6 +529,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     )
       .then((res) => {
         setWelchPairRaw(res);
+        setWelchPairSig(reqSig);
         void listCacheEntries(undefined, 100).then((entries) => {
           dispatch({ type: "SET_CACHE_ENTRIES", entries });
         });
@@ -513,6 +537,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       .catch((err) => {
         if ((err as Error).name !== "AbortError") {
           setWelchPairRaw(null);
+          setWelchPairSig(null);
           setWelchError(err instanceof ApiError ? err.detail : (err as Error).message);
         }
       })
@@ -529,6 +554,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     catalog,
     stationMetaMap,
     state.activeCrossTab,
+    currentWelchSig,
     state.episodeId,
     state.stationA,
     state.stationB,
@@ -796,25 +822,32 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setLoadingFlr(true);
       setFlrError(null);
       let winIdx = windowIndexOverride ?? 0;
-      if (
-        windowIndexOverride === undefined &&
-        welchPairRaw &&
-        welchPairRaw.window_timestamps_utc.length > 0
-      ) {
-        const targetMs =
-          cursorRef.current ??
-          state.cursorUtcMs ??
-          Date.parse(welchPairRaw.window_timestamps_utc[0]);
-        let bestIdx = 0;
-        let bestDiff = Number.POSITIVE_INFINITY;
-        welchPairRaw.window_timestamps_utc.forEach((iso, idx) => {
-          const diff = Math.abs(Date.parse(iso) - targetMs);
-          if (diff < bestDiff) {
-            bestDiff = diff;
-            bestIdx = idx;
-          }
-        });
-        winIdx = bestIdx;
+      if (windowIndexOverride === undefined) {
+        const targetMs = cursorRef.current ?? state.cursorUtcMs;
+        if (
+          welchPairRaw &&
+          welchPairRaw.window_timestamps_utc.length > 0 &&
+          welchPairSig === currentWelchSig
+        ) {
+          const refMs = targetMs ?? Date.parse(welchPairRaw.window_timestamps_utc[0]);
+          let bestIdx = 0;
+          let bestDiff = Number.POSITIVE_INFINITY;
+          welchPairRaw.window_timestamps_utc.forEach((iso, idx) => {
+            const diff = Math.abs(Date.parse(iso) - refMs);
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestIdx = idx;
+            }
+          });
+          winIdx = bestIdx;
+        } else {
+          winIdx = computeCursorWindowIndex(
+            targetMs,
+            episodeBoundsMs,
+            state.windowSamples,
+            state.stepSamples,
+          );
+        }
       }
 
       try {
@@ -853,6 +886,9 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     },
     [
       welchPairRaw,
+      welchPairSig,
+      currentWelchSig,
+      episodeBoundsMs,
       state.cursorUtcMs,
       state.episodeId,
       state.meridionalChain,
@@ -896,6 +932,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       polarizationRaw,
       maskedPolarization,
       welchPairRaw,
+      welchPairSig,
       maskedWelch,
       flrProfile,
       wtcResult,
@@ -934,6 +971,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       polarizationRaw,
       maskedPolarization,
       welchPairRaw,
+      welchPairSig,
       maskedWelch,
       flrProfile,
       wtcResult,

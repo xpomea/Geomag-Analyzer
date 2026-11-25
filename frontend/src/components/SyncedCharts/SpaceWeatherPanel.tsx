@@ -1,9 +1,15 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import type * as echarts from "echarts";
 import { AlertCircle, Sun } from "lucide-react";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
+import {
+  buildExportFilename,
+  formatCsvWithMetadata,
+  renderEChartsToSvg,
+} from "../../utils/exportUtils";
 import { formatUtcFull } from "../../utils/formatters";
+import { ExportToolbar } from "../Common/ExportToolbar";
 import { CursorOverlayLine } from "./CursorOverlayLine";
 import {
   CHART_GRID_LEFT,
@@ -63,6 +69,7 @@ export const SpaceWeatherPanel: React.FC = () => {
 
     return {
       animation: false,
+      useUTC: true,
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
@@ -262,6 +269,76 @@ export const SpaceWeatherPanel: React.FC = () => {
     onCursorChange: setCursorUtcMs,
   });
 
+  const exportBase = buildExportFilename(
+    ["space_weather", state.episodeId, state.solar1ShiftMode],
+    "svg",
+  ).replace(/\.svg$/, "");
+
+  const getExportSvg = useCallback(() => {
+    if (!option) return null;
+    return renderEChartsToSvg(option, {
+      width: 920,
+      height: 360,
+      theme: state.exportTheme,
+      viewRangeMs: state.viewRangeMs,
+      title: `Space Weather (${state.episodeId})`,
+      desc: `SOLAR-1 (${state.solar1ShiftMode}), OMNI, OULU NM`,
+    });
+  }, [option, state.exportTheme, state.viewRangeMs, state.episodeId, state.solar1ShiftMode]);
+
+  const getExportCsv = useCallback(() => {
+    if (!shiftedSolar1 || !rawSpaceWeather) return null;
+    const s1 = shiftedSolar1.solar1;
+    const omniMap = new Map<string, number>();
+    if (rawSpaceWeather.omni?.available) {
+      rawSpaceWeather.omni.timestamps_utc.forEach((t, idx) => omniMap.set(t, idx));
+    }
+    const ouluMap = new Map<string, number>();
+    if (rawSpaceWeather.oulu?.available) {
+      rawSpaceWeather.oulu.timestamps_utc.forEach((t, idx) => ouluMap.set(t, idx));
+    }
+    const rows = s1.timestamps_utc.map((t, i) => {
+      const oi = omniMap.get(t);
+      const nmi = ouluMap.get(t);
+      return [
+        t,
+        s1.series.bz_gsm_nT?.[i] ?? null,
+        s1.series.b_mag_gsm_nT?.[i] ?? null,
+        s1.series.vx_gse_kms?.[i] ?? null,
+        s1.series.pdyn_nPa?.[i] ?? null,
+        s1.propagation_delay_min[i] ?? null,
+        oi !== undefined ? (rawSpaceWeather.omni?.series.ae_nT?.[oi] ?? null) : null,
+        oi !== undefined ? (rawSpaceWeather.omni?.series.au_nT?.[oi] ?? null) : null,
+        oi !== undefined ? (rawSpaceWeather.omni?.series.al_nT?.[oi] ?? null) : null,
+        nmi !== undefined ? (rawSpaceWeather.oulu?.delta_n_pct?.[nmi] ?? null) : null,
+      ];
+    });
+    return formatCsvWithMetadata(
+      {
+        episode_id: state.episodeId,
+        solar1_time_frame: s1.time_frame,
+        solar1_shift_mode: state.solar1ShiftMode,
+        ref_distance_km: state.refDistanceKm,
+        manual_lag_min: state.solar1ShiftMode === "manual" ? state.manualLagMin : "",
+        omni_available: Boolean(rawSpaceWeather.omni?.available),
+        oulu_baseline_cpm: rawSpaceWeather.oulu?.baseline_cpm ?? "",
+      },
+      [
+        "timestamp_utc",
+        "bz_gsm_nT",
+        "b_mag_gsm_nT",
+        "vx_gse_kms",
+        "pdyn_nPa",
+        "solar1_delay_min",
+        "omni_ae_nT",
+        "omni_au_nT",
+        "omni_al_nT",
+        "oulu_delta_n_pct",
+      ],
+      rows,
+    );
+  }, [shiftedSolar1, rawSpaceWeather, state.episodeId, state.solar1ShiftMode, state.refDistanceKm, state.manualLagMin]);
+
   return (
     <section className="panel-card">
       <div className="panel-header">
@@ -280,6 +357,14 @@ export const SpaceWeatherPanel: React.FC = () => {
             </span>
           )}
           {loadingTimeseries && <span className="pill">Загрузка…</span>}
+          <ExportToolbar
+            baseFilename={exportBase}
+            getSvg={getExportSvg}
+            svgWidth={920}
+            svgHeight={360}
+            getCsv={getExportCsv}
+            disabled={!option}
+          />
         </div>
       </div>
       <div className="panel-body">

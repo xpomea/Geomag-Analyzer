@@ -1,11 +1,75 @@
 import type {
+  BandType,
+  CoordFrame,
+  CrossComponent,
   DynamicPolarizationOut,
   MeridionalFLRResponse,
   PolarizationResponse,
+  SpectrumType,
   Stokes2DOut,
   WelchPairResponse,
 } from "../api/types";
 import { gamma2Crit, pCrit, scaleGamma2CritForAlpha } from "./thresholds";
+
+export interface WelchPairSigInput {
+  episodeId: string;
+  stationA: string;
+  stationB: string;
+  crossComponent: CrossComponent;
+  coordFrame: CoordFrame;
+  externalD0Deg: number | null;
+  externalD0DegB: number | null;
+  band: BandType;
+  tMaxPc6Sec: number;
+  L: number;
+  M: number;
+  windowSamples: number;
+  stepSamples: number;
+  spectrumType: SpectrumType;
+}
+
+/**
+ * Canonical request signature for /api/cross/welch/pair parameters (excluding alpha,
+ * which is re-masked client-side without re-fetching).
+ */
+export function buildWelchPairRequestSignature(p: WelchPairSigInput): string {
+  return JSON.stringify([
+    p.episodeId,
+    p.stationA,
+    p.stationB,
+    p.crossComponent,
+    p.coordFrame,
+    p.coordFrame === "XmYm" ? p.externalD0Deg : null,
+    p.coordFrame === "XmYm" ? p.externalD0DegB : null,
+    p.band,
+    p.tMaxPc6Sec,
+    p.L,
+    p.M,
+    p.windowSamples,
+    p.stepSamples,
+    p.spectrumType,
+  ]);
+}
+
+/**
+ * Compute sliding-window index at cursorUtcMs for Welch matrix and FLR endpoints
+ * directly from episode bounds (independent of whether the Welch tab has fetched).
+ */
+export function computeCursorWindowIndex(
+  cursorMs: number | null,
+  episodeBoundsMs: [number, number] | null,
+  windowSamples: number,
+  stepSamples: number,
+): number {
+  if (!episodeBoundsMs || cursorMs === null || !Number.isFinite(cursorMs)) return 0;
+  const [b0, b1] = episodeBoundsMs;
+  const step = Math.max(1, stepSamples);
+  const nSamples = Math.max(windowSamples, Math.round((b1 - b0) / 60_000) + 1);
+  const maxIdx = Math.max(0, Math.floor((nSamples - windowSamples) / step));
+  const offsetMin = (cursorMs - b0) / 60_000 - windowSamples * 0.5;
+  const rawIdx = Math.round(offsetMin / step);
+  return Math.min(maxIdx, Math.max(0, rawIdx));
+}
 
 /**
  * Extract contiguous [startMs, endMs] intervals where mask[i] is true
