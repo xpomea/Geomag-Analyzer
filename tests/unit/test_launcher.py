@@ -1,8 +1,7 @@
-"""Unit tests for Phase 7 launcher, icon generator, offline bundle, and packaging specs."""
+"""Unit tests for Phase 7 launcher, icon asset, offline bundle, and packaging spec."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 import re
@@ -165,7 +164,6 @@ def test_resolve_runtime_settings_portable_and_explicit_dir(monkeypatch, tmp_pat
         shutdown_callback=lambda: None,
     )
     assert s_port.user_data_dir == fake_app_dir / "user_data"
-    assert s_port.require_auth is True
     assert s_port.shutdown_callback is not None
     assert "127.0.0.1" in s_port.allowed_hosts
     assert "localhost" in s_port.allowed_hosts
@@ -215,7 +213,6 @@ def test_launcher_runtime_fallback_when_pywebview_fails(monkeypatch, tmp_path: P
                     req = urllib.request.Request(
                         f"{data['base_url']}/api/shutdown",
                         method="POST",
-                        headers={"X-Session-Token": str(data["session_token"])},
                     )
                     with opener.open(req, timeout=5.0) as resp:
                         stop_result["shutdown_status"] = int(resp.status)
@@ -231,7 +228,6 @@ def test_launcher_runtime_fallback_when_pywebview_fails(monkeypatch, tmp_path: P
                 "--user-data-dir",
                 str(user_data),
                 "--no-browser-open",
-                "--no-tray",
                 "--ready-file",
                 str(ready_file),
             ]
@@ -249,19 +245,8 @@ def test_launcher_runtime_fallback_when_pywebview_fails(monkeypatch, tmp_path: P
                 h.close()
 
 
-def test_generate_icon_produces_valid_multi_res_ico(tmp_path: Path):
-    spec = importlib.util.spec_from_file_location(
-        "generate_icon",
-        PACKAGING_DIR / "generate_icon.py",
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    out = mod.generate_icon_file(tmp_path / "test.ico")
-    raw = out.read_bytes()
-    committed = (PACKAGING_DIR / "geomag_analyzer.ico").read_bytes()
-    assert raw == committed
+def test_committed_icon_is_valid_multi_res_ico():
+    raw = (PACKAGING_DIR / "geomag_analyzer.ico").read_bytes()
 
     reserved, img_type, count = struct.unpack("<HHH", raw[:6])
     assert (reserved, img_type, count) == (0, 1, 4)
@@ -285,7 +270,7 @@ def test_generate_icon_produces_valid_multi_res_ico(tmp_path: Path):
     assert sizes_seen == [16, 32, 48, 256]
 
 
-def test_packaging_specs_and_web_configs_meet_phase7_contracts():
+def test_packaging_spec_meets_phase7_contracts():
     spec_text = (PACKAGING_DIR / "geomag_analyzer.spec").read_text(encoding="utf-8")
     assert "exclude_binaries=True" in spec_text
     assert "COLLECT(" in spec_text
@@ -294,29 +279,7 @@ def test_packaging_specs_and_web_configs_meet_phase7_contracts():
     assert "PROCESSED_DIR" in spec_text
     assert "FRONTEND_DIST_DIR" in spec_text
     assert "geomag_analyzer.ico" in spec_text
-
-    iss_text = (PACKAGING_DIR / "installer.iss").read_text(encoding="utf-8")
-    assert "PrivilegesRequired=lowest" in iss_text
-    assert "ArchitecturesAllowed=x64compatible" in iss_text
-    assert r"DefaultDirName={localappdata}\Programs\GeoMagAnalyzer" in iss_text
-    assert "desktopicon" in iss_text
-    assert "OutputBaseFilename=GeoMagAnalyzer_Setup" in iss_text
-    assert "portable.mode" not in iss_text
-
-    nginx_text = (PACKAGING_DIR / "web" / "nginx.conf").read_text(encoding="utf-8")
-    assert "--workers 1" in nginx_text
-    assert "proxy_http_version 1.1" in nginx_text
-    assert "Upgrade $http_upgrade" in nginx_text
-    assert "proxy_buffering off" in nginx_text
-
-    caddy_text = (PACKAGING_DIR / "web" / "Caddyfile").read_text(encoding="utf-8")
-    assert "--workers 1" in caddy_text
-    assert "flush_interval -1" in caddy_text
-    assert "/api/jobs/*/events" in caddy_text
-
-    svc_text = (PACKAGING_DIR / "web" / "geomag-analyzer.service").read_text(encoding="utf-8")
-    assert "--workers 1" in svc_text
-    assert "uvicorn geomag_api.main:app" in svc_text
+    assert "multipart" not in spec_text
 
 
 def test_frontend_dist_is_100_percent_offline_with_world_topojson():

@@ -3,7 +3,6 @@ import * as echarts from "echarts";
 
 export const CHART_GRID_LEFT = 68;
 export const CHART_GRID_RIGHT = 64;
-export const CHART_SYNC_GROUP = "geomag-sync";
 
 export interface UseSyncedEChartArgs {
   option: echarts.EChartsCoreOption | null;

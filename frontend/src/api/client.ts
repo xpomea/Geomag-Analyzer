@@ -1,5 +1,4 @@
 import type {
-  BootstrapResponse,
   CacheEntryOut,
   CatalogResponse,
   GeomagTimeseriesResponse,
@@ -11,7 +10,6 @@ import type {
   NetworkSnapshotResponse,
   PolarizationRequest,
   PolarizationResponse,
-  SessionResponse,
   ShutdownResponse,
   SpaceWeatherResponse,
   WTCJobRequest,
@@ -41,22 +39,6 @@ export class ApiError extends Error {
   }
 }
 
-let sessionToken: string | null = null;
-let authInitPromise: Promise<AuthInitResult> | null = null;
-
-export function setSessionToken(token: string | null): void {
-  sessionToken = token;
-}
-
-export function getSessionToken(): string | null {
-  return sessionToken;
-}
-
-export function resetAuthInitForTests(): void {
-  authInitPromise = null;
-  sessionToken = null;
-}
-
 function buildQuery(params: Record<string, string | number | boolean | null | undefined>): string {
   const sp = new URLSearchParams();
   for (const [key, val] of Object.entries(params)) {
@@ -80,12 +62,6 @@ export async function requestJson<T>(
     !headers.has("Content-Type")
   ) {
     headers.set("Content-Type", "application/json");
-  }
-  if (
-    sessionToken &&
-    (method === "POST" || method === "DELETE" || method === "PUT" || method === "PATCH")
-  ) {
-    headers.set("X-Session-Token", sessionToken);
   }
 
   const resp = await fetch(url, {
@@ -111,82 +87,6 @@ export async function requestJson<T>(
   }
 
   return (await resp.json()) as T;
-}
-
-export interface AuthInitResult {
-  authenticated: boolean;
-  requireAuth: boolean;
-}
-
-async function exchangeBootstrapToken(token: string): Promise<AuthInitResult> {
-  const trimmed = token.trim();
-  const res = await requestJson<BootstrapResponse>(
-    `/api/auth/bootstrap${buildQuery({ token: trimmed })}`,
-  );
-  setSessionToken(res.session_token);
-  return { authenticated: res.authenticated, requireAuth: true };
-}
-
-export async function submitBootstrapToken(token: string): Promise<AuthInitResult> {
-  const res = await exchangeBootstrapToken(token);
-  authInitPromise = res.authenticated ? Promise.resolve(res) : null;
-  return res;
-}
-
-function stripTokenFromUrl(): void {
-  try {
-    const url = new URL(window.location.href);
-    if (url.searchParams.has("token")) {
-      url.searchParams.delete("token");
-      const next = `${url.pathname}${url.search}${url.hash}`;
-      window.history.replaceState(null, "", next);
-    }
-  } catch {
-    // ignore in non-browser contexts
-  }
-}
-
-export function initAuthSession(): Promise<AuthInitResult> {
-  if (authInitPromise) {
-    return authInitPromise;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  const bootstrapTok = params.get("token");
-  if (bootstrapTok) {
-    stripTokenFromUrl();
-  }
-
-  const pending = (async (): Promise<AuthInitResult> => {
-    if (bootstrapTok) {
-      try {
-        return await exchangeBootstrapToken(bootstrapTok);
-      } catch {
-        // Fall through to /api/auth/session in case cookie was already active
-      }
-    }
-
-    try {
-      const sess = await requestJson<SessionResponse>("/api/auth/session");
-      setSessionToken(sess.session_token ?? null);
-      if (!sess.authenticated && sess.require_auth) {
-        authInitPromise = null;
-      }
-      return {
-        authenticated: sess.authenticated,
-        requireAuth: sess.require_auth,
-      };
-    } catch (err) {
-      authInitPromise = null;
-      if (err instanceof ApiError && err.status === 401) {
-        return { authenticated: false, requireAuth: true };
-      }
-      throw err;
-    }
-  })();
-
-  authInitPromise = pending;
-  return pending;
 }
 
 export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
@@ -343,7 +243,6 @@ export function shutdownServer(): Promise<ShutdownResponse> {
 
 export interface JobStreamHandlers {
   onUpdate: (job: JobStatusResponse) => void;
-  onTransport?: (transport: "ws" | "sse") => void;
   onError?: (err: string) => void;
   onClose?: () => void;
 }
@@ -355,7 +254,8 @@ export function subscribeJobProgress(
   let closed = false;
   let sawTerminal = false;
   let ws: WebSocket | null = null;
-  let sse: EventSource | null = null;
+  let pollTimer: number | null = null;
+  let pollAbort: AbortController | null = null;
 
   const cleanup = () => {
     closed = true;
@@ -367,65 +267,74 @@ export function subscribeJobProgress(
       }
       ws = null;
     }
-    if (sse) {
-      try {
-        sse.close();
-      } catch {
-        // ignore
-      }
-      sse = null;
+    if (pollTimer !== null) {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (pollAbort) {
+      pollAbort.abort();
+      pollAbort = null;
+    }
+  };
+
+  const applyJob = (job: JobStatusResponse) => {
+    if (TERMINAL_JOB_STATUSES.has(job.status)) {
+      sawTerminal = true;
+    }
+    handlers.onUpdate(job);
+    if (sawTerminal) {
+      cleanup();
+      handlers.onClose?.();
     }
   };
 
   const handleMessage = (rawData: string) => {
     try {
-      const job = JSON.parse(rawData) as JobStatusResponse;
-      if (TERMINAL_JOB_STATUSES.has(job.status)) {
-        sawTerminal = true;
-      }
-      handlers.onUpdate(job);
-      if (sawTerminal) {
-        cleanup();
-        handlers.onClose?.();
-      }
+      applyJob(JSON.parse(rawData) as JobStatusResponse);
     } catch {
       handlers.onError?.("Malformed progress payload");
     }
   };
 
-  const startSseFallback = () => {
-    if (closed || sawTerminal || sse) {
+  const startPollFallback = () => {
+    if (closed || sawTerminal || pollTimer !== null) {
       return;
     }
-    handlers.onTransport?.("sse");
-    const url = `/api/jobs/${encodeURIComponent(jobId)}/events`;
-    sse = new EventSource(url, { withCredentials: true });
-    sse.onmessage = (ev) => {
-      if (!closed) {
-        handleMessage(ev.data);
+    let consecutiveFailures = 0;
+    const pollOnce = async () => {
+      if (closed || sawTerminal) return;
+      const ctrl = new AbortController();
+      pollAbort = ctrl;
+      try {
+        const job = await getJobStatus(jobId, ctrl.signal);
+        consecutiveFailures = 0;
+        if (!closed) {
+          applyJob(job);
+        }
+      } catch (err) {
+        if (closed || (err as Error).name === "AbortError") return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 5) {
+          cleanup();
+          handlers.onError?.("Job status polling failed repeatedly");
+          handlers.onClose?.();
+        }
+      } finally {
+        if (pollAbort === ctrl) {
+          pollAbort = null;
+        }
       }
     };
-    sse.onerror = () => {
-      if (closed || sawTerminal) {
-        return;
-      }
-      if (sse?.readyState === EventSource.CLOSED) {
-        cleanup();
-        handlers.onError?.("SSE connection closed unexpectedly");
-        handlers.onClose?.();
-      }
-    };
+    void pollOnce();
+    pollTimer = window.setInterval(() => {
+      void pollOnce();
+    }, 1000);
   };
 
   try {
     const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProto}//${window.location.host}/ws/jobs/${encodeURIComponent(jobId)}`;
     ws = new WebSocket(wsUrl);
-    ws.onopen = () => {
-      if (!closed) {
-        handlers.onTransport?.("ws");
-      }
-    };
     ws.onmessage = (ev) => {
       if (!closed && typeof ev.data === "string") {
         handleMessage(ev.data);
@@ -439,17 +348,17 @@ export function subscribeJobProgress(
           // ignore
         }
         ws = null;
-        startSseFallback();
+        startPollFallback();
       }
     };
     ws.onclose = () => {
       ws = null;
       if (!closed && !sawTerminal) {
-        startSseFallback();
+        startPollFallback();
       }
     };
   } catch {
-    startSseFallback();
+    startPollFallback();
   }
 
   return cleanup;

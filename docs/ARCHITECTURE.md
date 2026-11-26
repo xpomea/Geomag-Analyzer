@@ -16,14 +16,13 @@
 | Персона | Роль и окружение | Ключевые требования к системе |
 |---|---|---|
 | **Автор диссертации (исследователь)** | Основной разработчик и пользователь на Windows; готовит Главу 4 (сравнение 4 бурь, меридиональные профили, MLT-асимметрия, связь с `Vsw`/`Pdyn` и Форбуш-понижением `OULU`) | Строгое соответствие формулам и тестам Раздела 11 `.docx`; пакетный пересчёт; экспорт векторных графиков `SVG`/`PNG` и таблиц `CSV`; единое вычислительное ядро для UI и CLI-скриптов. |
-| **Нетехнические исследователи** | Windows-ПК (включая университетские машины **без прав администратора** и потенциально **без интернета**) | Установка и запуск в один-два клика (распаковать `.zip` или запустить пользовательский инсталлятор); отсутствие Docker/WSL2/ручной настройки Python; мгновенный отклик на нормализованных данных `Parquet` и пользовательском кэше `user_cache/`. |
-| **Вычислительный веб-сервер (опциональный режим)** | Сервер кафедры или VPS (Linux/Windows) под управлением `Nginx`/`Caddy` | Возможность развёртывания **той же кодовой базы** в режиме веб-сервиса для удалённого доступа по HTTP/WebSocket без переписывания прикладной логики. |
+| **Нетехнические исследователи** | Windows-ПК (включая университетские машины **без прав администратора** и потенциально **без интернета**) | Запуск в один-два клика (распаковать портативный `.zip`); отсутствие Docker/WSL2/ручной настройки Python; мгновенный отклик на нормализованных данных `Parquet` и пользовательском кэше `user_cache/`. |
 
 ### 1.2. Обоснование выбора Варианта 1 и отказ от альтернатив
 
 Выбор стека **Вариант 1** (`FastAPI + NumPy/SciPy + React/TS + pywebview`) обусловлен следующими инженерными и научными факторами:
-1. **Производительность научных вычислений без переусложнения:** прямые замеры `NumPy`/`SciPy` показывают, что `FFT+IFFT` для `49 станций × 3 компоненты × 17 280 точек` выполняется за **88,3 мс**, кросс-спектр Уэлча для **всех 1 176 пар станций** (1 окно, 4 320 точек) — за **50,2 мс**, а динамический кросс-спектр всех 1 176 пар на 288 шагах — за **1,07 с**. Ядро `NumPy`/`SciPy` уже опирается на C/Fortran (`PocketFFT`, `OpenBLAS`, `sosfilt`), поэтому переписывание математики на Rust (`Вариант 3: Tauri + Rust`) дало бы ускорение порядка лишь $1.2\text{–}2.5\times$ ценой $2.5\text{–}3\times$ роста трудоёмкости (ручная реализация Баттерворта `SOS`, $I_0$ Кайзера, DPSS, обратной бета-функции $B_\alpha^{-1}(n-1, 3/2)$, линковка `libnetcdf`/`libhdf5` под Windows и отдельный HTTP-адаптер для веб-режима).
-2. **Двойной режим «Настольное приложение $\leftrightarrow$ Веб-сервис»:** `FastAPI` изначально работает по HTTP/WebSocket. Для десктопа интерфейс открывается в `pywebview` (использует встроенный в Windows компонент Microsoft Edge `WebView2`, не требуя тащить ~200 МБ Chromium как Electron), а для веб-сервиса та же пара `FastAPI + static React` запускается под `uvicorn` (`--workers 1`) без `pywebview`. В отличие от `PySide6/Qt` (`Вариант 2`), веб-режим не требует переделки интерфейса, а интерактивная 49-станционная географическая карта на **`D3-geo` + локальном `world-110m.topojson`** работает на 100% офлайн и не зависит от проблемных под `PyInstaller` C-библиотек `Cartopy`/`GEOS`/`PROJ`.
+1. **Производительность научных вычислений без переусложнения:** прямые замеры `NumPy`/`SciPy` показывают, что `FFT+IFFT` для `49 станций × 3 компоненты × 17 280 точек` выполняется за **88,3 мс**, кросс-спектр Уэлча для **всех 1 176 пар станций** (1 окно, 4 320 точек) — за **50,2 мс**, а динамический кросс-спектр всех 1 176 пар на 288 шагах — за **1,07 с**. Ядро `NumPy`/`SciPy` уже опирается на C/Fortran (`PocketFFT`, `OpenBLAS`, `sosfilt`), поэтому переписывание математики на Rust (`Вариант 3: Tauri + Rust`) дало бы ускорение порядка лишь $1.2\text{–}2.5\times$ ценой $2.5\text{–}3\times$ роста трудоёмкости (ручная реализация Баттерворта `SOS`, $I_0$ Кайзера, DPSS, обратной бета-функции $B_\alpha^{-1}(n-1, 3/2)$, линковка `libnetcdf`/`libhdf5` под Windows).
+2. **Настольное приложение `pywebview` с фолбэком в системный браузер:** `FastAPI` обслуживает встроенный статический бандл React по HTTP/WebSocket. Для десктопа интерфейс открывается в `pywebview` (использует встроенный в Windows компонент Microsoft Edge `WebView2`, не требуя тащить ~200 МБ Chromium как Electron), а при отсутствии `WebView2` или с флагом `--browser` та же пара `FastAPI + static React` открывается в системном браузере (`http://127.0.0.1:<port>`). Интерактивная 49-станционная географическая карта на **`D3-geo` + локальном `world-110m.topojson`** работает на 100% офлайн и не зависит от проблемных под `PyInstaller` C-библиотек `Cartopy`/`GEOS`/`PROJ`.
 3. **Управляемость долгих вычислений:** многоминутные задачи (`XWT`/`WTC` с 300–1000 суррогатами Монте-Карло и калибровка эффективного $n$) не блокируют UI и не теряются при обновлении вкладки браузера (в отличие от чисто браузерного `Варианта 4a`), а исполняются в изолированном пуле процессов `ProcessPoolExecutor` с кэшированием на диск.
 4. **Отказ от антипаттернов развёртывания:** исключены `Docker/WSL2` (проблемы прав и виртуализации на Windows), ручной `venv + CLI`, `Streamlit` (перезапуск всего скрипта при взаимодействии) и `PyInstaller --onefile` (задержка распаковки 10–15 с и частые ложные срабатывания Windows Defender).
 
@@ -50,14 +49,14 @@
 +-----------------------------------------------------------------------------------+
 |                        ПОЛЬЗОВАТЕЛЬСКИЙ УРОВЕНЬ (Presentation)                    |
 |   +------------------------------------+    +---------------------------------+   |
-|   | Desktop-оболочка (Windows default) |    | Браузер (локальный или веб)     |   |
+|   | Desktop-оболочка (Windows default) |    | Браузер (локальный фолбэк)      |   |
 |   | pywebview (Edge WebView2)          |    | Chrome / Edge / Firefox         |   |
-|   | + fallback на --browser            |    | http://127.0.0.1:<port> / HTTPS |   |
+|   | + fallback на --browser            |    | http://127.0.0.1:<port>/        |   |
 |   +-----------------+------------------+    +----------------+----------------+   |
 |                     |      React + TypeScript SPA (Offline)  |                    |
 |                     |   [Синхр. графики] [Офлайн-карта D3-geo] [Экспорт]    |
 +---------------------+----------------------------------------+--------------------+
-                                       | HTTP REST + WebSocket / SSE
+                                       | HTTP REST + WebSocket
 +--------------------------------------v--------------------------------------------+
 |                        СЛОЙ API И УПРАВЛЕНИЯ ЗАДАЧАМИ (FastAPI)                   |
 |  • Роутеры: /api/catalog, /api/timeseries, /api/polarization, /api/cross, /api/jobs |
@@ -68,7 +67,7 @@
                    |                                           |
 +------------------v-------------------+   +-------------------v--------------------+
 | ВЫЧИСЛИТЕЛЬНОЕ ЯДРО (geomag_core)    |   | СЛОЙ ETL, СТАТИКИ И RUNTIME-КЭША      |
-| (Pure Python + NumPy/SciPy)          |   | • Парсеры IAGA-2002/CSV/ASC/NetCDF     |
+| (Pure Python + NumPy/SciPy)          |   | • Парсеры IAGA-2002/CSV/ASC          |
 | • QC и сшивка штормов (§3)           |   | • data/raw/ (read-only первоисточник)  |
 | • Вариант A: Welch / Multitaper (§4) |   | • data/processed/ (read-only Parquet + |
 | • Вариант B: Подсегм.+SOS/FFT+Hilb   |   |   catalog.sqlite)                      |
@@ -79,16 +78,15 @@
 +--------------------------------------+   +----------------------------------------+
 ```
 
-### 3.1. Двойной режим запуска (Desktop и Web-Service)
+### 3.1. Локальные режимы запуска (Desktop и `--browser`)
 
 1. **Настольный режим (по умолчанию на Windows):**
    - Точка входа `launcher.py` обязательно вызывает **`multiprocessing.freeze_support()`** под `if __name__ == "__main__":` (обязательно для механизма `spawn` в `PyInstaller --onedir` на Windows), находит свободный локальный порт `127.0.0.1:<port>`, запускает `uvicorn` (`--workers 1`) в фоновом потоке и открывает окно `pywebview` (рендеринг через системный `Edge WebView2`).
    - Внутри дочерних процессов `ProcessPoolExecutor` принудительно выставляются однопоточные ограничения BLAS (`OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`), чтобы исключить переподписку потоков $(N_{\text{cpu}}-1) \cdot N_{\text{cpu}}$.
-   - **Механизм фолбэка (~20 строк кода):** если `WebView2 Runtime` отсутствует (старая версия Windows) или передан ключ `--browser`, лаунчер автоматически открывает системный браузер по умолчанию на `http://127.0.0.1:<port>?token=<bootstrap_token>`.
-   - **Корректное завершение в обоих режимах:** при закрытии окна `pywebview` сервер `FastAPI` и воркеры `ProcessPoolExecutor` останавливаются штатно; для режима `--browser` при `console=False` (без окна терминала) в UI встроена кнопка **«Остановить сервер / Выход»** (`POST /api/shutdown` с session-token) и/или иконка выхода в системном трее Windows.
-2. **Режим веб-сервиса (Headless Server Mode):**
-   - Та же кодовая база запускается командой `uvicorn geomag_api.main:app --host 0.0.0.0 --port 8000 --workers 1` (без импорта `pywebview`) за reverse proxy (`Nginx`/`Caddy`, терминирующим TLS и проксирующим WebSocket-соединения `Upgrade/Connection`). При использовании `JobManager` в памяти процесса обязателен `--workers 1`; горизонтальное масштабирование `>1` API-воркера допускается только при выносе очереди задач и токенов отмены во внешний брокер/БД (`Redis`/SQLite).
-   - В серверном режиме активируются конфигурационные ограничения: лимит числа одновременных MC-задач в `ProcessPoolExecutor`, квота на число суррогатов и общий дисковый `user_cache/`, разделяемый между сессиями.
+   - **Механизм фолбэка (~20 строк кода):** если `WebView2 Runtime` отсутствует (старая версия Windows) или передан ключ `--browser`, лаунчер автоматически открывает системный браузер по умолчанию на `http://127.0.0.1:<port>/`.
+   - **Корректное завершение в обоих режимах:** при закрытии окна `pywebview` сервер `FastAPI` и воркеры `ProcessPoolExecutor` останавливаются штатно; для режима `--browser` при `console=False` (без окна терминала) в UI встроена кнопка **«Exit»** (`POST /api/shutdown`).
+2. **Локальный серверный запуск для разработки:**
+   - При необходимости отладки без `pywebview` приложение запускается напрямую командой `uvicorn geomag_api.main:app --host 127.0.0.1 --port 8000 --workers 1`. При использовании `JobManager` в памяти процесса обязателен `--workers 1`.
 
 ---
 
@@ -133,7 +131,7 @@
 | `data/processed/solar_wind/*.parquet` | `Apache Parquet` (read-only) | `solar1_l1_1min.parquet` (`bx/by/bz` GSE/GSM, `n_p`, `T_p`, `vx/vy/vz`, `pdyn_nPa`, `swips_flags`, `sweep_offset_sec`) и `omni_bsn_1min.parquet` (все ключевые поля + `AE, AL, AU`). |
 | `data/processed/cosmic_rays/oulu_nm_1min.parquet` | `Apache Parquet` (read-only) | `timestamp_utc`, `uncorrected_cpm`, `corrected_cpm`, `pressure_mbar`. |
 | `user_cache/spectra_phase1/<sha256>.npz` | `NPZ` (compressed) | Runtime-кэш оконных спектров $F_i(t, f)$ и масок валидных сегментов (Фаза 1 Уэлча). Поля ключа `canonical_params_json`: `{core_version, episode_id, station_iaga, component, coord_frame, d0_deg, L, M, detrend, window, qc_params}`. |
-| `user_cache/cross_wtc/<sha256>.npz` | `NPZ` | Runtime-кэш матриц `XWT`/`WTC`, `COI`, фазовых углов и порогов 95% Монте-Карло. Поля ключа `canonical_params_json`: `{core_version, episode_id, pair, component, coord_frame, d0_deg, band_range, scales, wavelet, smoothing_params, n_surrogates, alpha, seed, qc_params}`. |
+| `user_cache/cross_wtc/<sha256>.npz` | `NPZ` (compact `float32`) | Runtime-кэш матриц `XWT`/`WTC`, `COI`, фазовых углов и порогов 95% Монте-Карло (`W_i/W_j/W_ij` на диск не пишутся; 2D-матрицы сжаты в `float32`). Поля ключа `canonical_params_json`: `{core_version, stage, cache_format, episode_id, pair, component, coord_frame, d0_deg, band_range, scales, wavelet, smoothing_params, gap_policy, n_surrogates, alpha, seed, qc_params}`. |
 
 ---
 
@@ -234,12 +232,12 @@
 |---|---|---|---|
 | **Tier 1 (Мгновенный)** | $< 0.3\text{ с}$ | Переключение станций/штормов, зум, пересчёт порогов $\alpha \in \{0.05, 0.01\}$, загрузка кэша из `user_cache/` | Синхронный ответ `FastAPI` из `Parquet`/`NPZ` кэша |
 | **Tier 2 (Интерактивный)** | $< 2\text{ с}$ | Расчёт Варианта A/B для станции, 2D/3D Стокс, двухфазный кросс-спектр Уэлча (вкл. 1 176 пар при прогретой Фазе 1) | `FastAPI` threadpool (`NumPy`/`SciPy` освобождают GIL) |
-| **Tier 3 (Асинхронный)** | Десятки секунд — минуты | `XWT`/`WTC` + 300–1000 суррогатов Монте-Карло, динамическая матрица Уэлча $49\times 49$ без кэша, MC-калибровка эффективного $n$ | Очередь `ProcessPoolExecutor` + WebSocket/SSE прогресс + дисковый кэш |
+| **Tier 3 (Асинхронный)** | Десятки секунд — минуты | `XWT`/`WTC` + 300–1000 суррогатов Монте-Карло, динамическая матрица Уэлча $49\times 49$ без кэша, MC-калибровка эффективного $n$ | Очередь `ProcessPoolExecutor` + WebSocket прогресс (с поллинг-фолбэком) + дисковый кэш |
 
 **Протокол асинхронной задачи (`JobManager`):**
 1. Запрос `POST /api/jobs/wtc` формирует канонический ключ кэша `cache_key = sha256(core_version + canonical_params_json)` (единый стандарт с §4.2).
 2. Если результат уже есть в `user_cache/` (и/или `cache_index` в `runtime.sqlite`), немедленно возвращается `status: "cached"` со ссылкой на результат.
-3. Иначе задача помещается в `ProcessPoolExecutor` (с однопоточными ограничениями BLAS `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`), клиенту возвращается `job_id`, а прогресс (`progress_pct`, `stage`, `eta_sec`) передаётся от воркеров через **`multiprocessing.Manager().Queue()`** (или SQLite-поллинг) и транслируется по `WebSocket` (`/ws/jobs/{job_id}`) или `SSE` (`/api/jobs/{job_id}/events`).
+3. Иначе задача помещается в `ProcessPoolExecutor` (с однопоточными ограничениями BLAS `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`), клиенту возвращается `job_id`, а прогресс (`progress_pct`, `stage`, `eta_sec`) передаётся от воркеров через **`multiprocessing.Manager().Queue()`** и транслируется по `WebSocket` (`/ws/jobs/{job_id}`) с клиентским 1-секундным поллинг-фолбэком на `GET /api/jobs/{job_id}`.
 4. **Отмена (`DELETE /api/jobs/{job_id}`):** устанавливает разделяемый флаг **`multiprocessing.Manager().Event()`** (сериализуемый под Windows `spawn`, в отличие от голого `multiprocessing.Event`) или файловый/SQLite `cancel_token`, который проверяется между батчами Монте-Карло; прерванная задача очищает временные файлы и переводит статус в `cancelled` в `runtime.sqlite`.
 
 ---
@@ -264,38 +262,34 @@
 
 Карта должна одновременно отображать **Европу (37 станций, `28.3°N`–`77.0°N`, долготный размах `~46,1°` от `-16,40°` `GUI` до `+29,70°` `IZN`)** и **Канаду (12 станций, `43.9°N`–`74.7°N`, долготный размах `~70,7°` от `-123,42°` `VIC` до `-52,68°` `STJ`)**, что при одновременном показе охватывает **`~153°` (`153,12°`, от `-123,42°` до `+29,70°`)** по долготе (с пересчётом `[0, 360)` $\to$ `[-180, 180]`), допускать плавное масштабирование на отдельные регионы (например, Скандинавию и Украину `LVV`) и **гарантированно работать без интернета** (в частности, на защите диссертации).
 
-- **Единая 100% офлайн-стратегия (`D3-geo` + `world-atlas/world-110m.topojson` ~150 КБ):**
-  - Вся геометрия материков и границ рендерится 100% офлайн через **`D3-geo` (`topojson-client` + встроенный `world-110m.topojson`)** в равновеликой или конической проекции Ламберта (`geoConicConformal` / `geoAzimuthalEqualArea`), что **устраняет высокоширотные искажения проекции Web Mercator** (`HRN` `77.0°N`, `RES` `74.7°N`) и даёт нативные SVG-элементы на 60 FPS с идеальным экспортом в векторный `SVG` для диссертации.
+- **Единая 100% офлайн-стратегия (`D3-geo` + встроенный `frontend/src/assets/world-110m.topojson` ~150 КБ):**
+  - Вся геометрия материков и границ рендерится 100% офлайн через **`D3-geo` (`topojson-client` + встроенный `world-110m.topojson`)** в равноугольной конической проекции Ламберта (`geoConicConformal`), что **устраняет высокоширотные искажения проекции Web Mercator** (`HRN` `77.0°N`, `RES` `74.7°N`) и даёт нативные SVG-элементы на 60 FPS с идеальным экспортом в векторный `SVG` для диссертации.
   - Коммерческие/внешние тайлы (`Leaflet` + OSM/CartoDB) **не используются** в основном контуре: при внешней работе `Leaflet` требовал бы дополнительного адаптера `topojson-client`, вносил бы искажения Web Mercator на широте `77°N` и расходился бы по геометрии с векторным `SVG`-экспортом `D3-geo`.
 - **Научные слои на карте (синхронизированы с ползунком времени UTC):**
-  1. **Эллипсы поляризации Стокса** на каждой из 49 станций: полуоси в пропорции $|\varepsilon| = b/a$, ориентация по азимуту $\psi$, радиус пропорционален $\log(I)$ или $\sqrt{I}$, цвет и стрелка задают направление вращения (`CW` при $V > 0$ vs `CCW` при $V < 0$), а станции с $\hat{p} < p_{\text{crit}}$ или недостатком данных отображаются серым нейтральным маркером.
+  1. **Эллипсы поляризации Стокса** на каждой из 49 станций: полуоси в пропорции $|\varepsilon| = b/a$, ориентация по азимуту $\psi$, радиус пропорционален $\log_{10}(1+I)$, цвет и стрелка задают направление вращения (`CW` при $V > 0$ vs `CCW` при $V < 0$), а станции с $\hat{p} < p_{\text{crit}}$ или недостатком данных отображаются серым нейтральным маркером.
   2. **Линия терминатора день/ночь и полудня `MLT = 12`:** астрономический расчёт положения Солнца на выбранный момент UTC с наложением полупрозрачной ночной полусферы и меридиана `MLT = 12` (критично для визуализации смены знака вращения $\varepsilon$ на утренней и вечерней сторонах магнитопаузы при КГИ).
   3. **Интерактивный выбор пары и дуги когерентности:** клик по первой и второй станции выбирает пару для кросс-спектра; на карте рисуется геодезическая дуга, цвет и толщина которой кодируют $\gamma_{12}^2$, с всплывающей меткой $\Delta\phi_{12}$ и азимутального числа $m$.
 
 ---
 
-## 8. Упаковка под Windows, безопасность и веб-развёртывание
+## 8. Упаковка под Windows и локальная безопасность
 
 ### 8.1. Сборка настольного дистрибутива для Windows (приоритет №1)
 
 1. **Сборщик:** `PyInstaller --onedir` (единая папка с `GeoMagAnalyzer.exe` и библиотеками; упаковываются `NumPy`, `SciPy`, `PyArrow`, `pywebview`, `frontend/dist/` и `data/processed/`; холодный старт `1–2 с` без задержки самораспаковки `--onefile` и с минимальным риском ложного срабатывания антивируса). Обязателен вызов `multiprocessing.freeze_support()` в точке входа `launcher.py` и однопоточный BLAS (`OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`) в воркерах.
 2. **Разделение статики и пользовательских данных:**
-   - Внутри каталога установки/бандла `data/processed/` (`catalog.sqlite`, `.parquet`) и `frontend/dist/` открываются строго **read-only** (безопасно при обновлении инсталлятора и запуске с носителей без прав записи).
-   - Изменяемые `runtime.sqlite` (`jobs`, `cache_index`) и пользовательский кэш `user_cache/` записываются в **`%LOCALAPPDATA%\GeoMagAnalyzer\`** (для `Inno Setup`) либо в `./user_data/` (для портативного `.zip` при наличии прав записи с автоматическим фолбэком в `%LOCALAPPDATA%\GeoMagAnalyzer\`).
-3. **Два формата поставки без прав администратора:**
-   - **Портативный `.zip` (`GeoMagAnalyzer_Portable_Win64.zip`):** распаковка в любую пользовательскую папку (вплоть до флешки) и запуск `GeoMagAnalyzer.exe` двойным кликом; никаких записей в `Program Files` или системный реестр.
-   - **Установщик `Inno Setup` (`GeoMagAnalyzer_Setup.exe`):** настроен с `PrivilegesRequired=lowest` (установка в `{localappdata}\Programs\GeoMagAnalyzer` и ярлык на рабочем столе текущего пользователя без запроса UAC).
-   - **Управление процессом в `--browser` (`console=False`):** UI содержит кнопку «Остановить сервер / Выход» (`POST /api/shutdown` с session-token) и/или иконку системного трея Windows для чистого завершения сервера без диспетчера задач.
+   - Внутри каталога бандла `_internal/data/processed/` (`catalog.sqlite`, `.parquet`) и `_internal/frontend/dist/` открываются строго **read-only** (безопасно при запуске с носителей без прав записи).
+   - Изменяемые `runtime.sqlite` (`jobs`, `cache_index`) и пользовательский кэш `user_cache/` записываются рядом с `.exe` в `./user_data/` (при наличии файла-маркера `portable.mode` и прав записи) с автоматическим фолбэком в `%LOCALAPPDATA%\GeoMagAnalyzer\`.
+3. **Формат поставки без прав администратора:**
+   - **Портативный `.zip` (`GeoMagAnalyzer_Portable_Win64.zip`):** распаковка в любую пользовательскую папку (вплоть до флешки) и запуск `GeoMagAnalyzer.exe` двойным кликом (или `GeoMagAnalyzer_Browser.bat` для принудительного открытия в системном браузере); никаких записей в `Program Files` или системный реестр.
+   - **Управление процессом в `--browser` (`console=False`):** UI содержит кнопку «Exit» (`POST /api/shutdown`) для чистого завершения сервера и воркеров без диспетчера задач.
 4. **Комплект данных и runtime-кэш:** дистрибутив поставляется с уже выполненным ETL (`data/processed/`); спектры Фазы 1 Уэлча и результаты `XWT`/`WTC` сохраняются по мере расчёта в пользовательском `user_cache/` для мгновенного повторного открытия.
 
-### 8.2. Развёртывание в режиме веб-сервиса
+### 8.2. Локальная модель безопасности (`127.0.0.1`)
 
-1. `FastAPI` обслуживает статику `React/TS` по `/` и API/WebSocket по `/api/*`, `/ws/*`.
-2. Рекомендуемая конфигурация: **`uvicorn geomag_api.main:app --host 0.0.0.0 --port 8000 --workers 1`** за `Nginx`/`Caddy` с поддержкой WebSocket (`proxy_http_version 1.1; Upgrade; Connection "upgrade"`). Использование одного API-воркера (`--workers 1`) обязательно при хранении пула и отмен `JobManager` в памяти процесса (многоворкерный `gunicorn` допускается только при выносе состояния задач и токенов отмены во внешний брокер `Redis`/БД).
-3. Меры безопасности:
-   - привязка локального десктоп-сервера строго к `127.0.0.1`;
-   - **совместимая с `WebSocket`/`SSE` защита от локального CSRF:** строгая валидация заголовков **`Origin`/`Host`** на всех REST и WebSocket-ручках + одноразовый bootstrap-токен в URL/query при старте (`?token=...`), обмениваемый на `SameSite=Strict` `HttpOnly` cookie (так как браузерные `WebSocket` и `EventSource` API не позволяют передавать произвольные кастомные HTTP-заголовки; для мутирующих REST-запросов `POST`/`DELETE`, включая `/api/shutdown`, дополнительно проверяется `X-Session-Token`);
-   - в публичном веб-режиме — ограничение числа воркеров `ProcessPoolExecutor`, тайм-аут и квота $N_{\text{MC}} \le 1000$ на запрос, `read-only` режим относительно базового набора данных.
+1. `FastAPI` обслуживает статику `React/TS` по `/` и API/WebSocket по `/api/*`, `/ws/*`, привязываясь строго к `127.0.0.1`.
+2. **Защита от DNS-rebinding и локального CSRF:** строгая валидация заголовков **`Host`**, **`Origin`** (включая совпадение `host:port`) и **`Sec-Fetch-Site != cross-site`** на всех HTTP- и WebSocket-запросах (`HostOriginCSRFMiddleware` + `verify_ws_origin`).
+3. Вычислительные квоты (`GEOMAG_MAX_WORKERS`, `GEOMAG_MAX_MC_SURROGATES <= 1000`, `GEOMAG_MAX_ACTIVE_JOBS`) ограничивают нагрузку на пул `ProcessPoolExecutor`.
 
 ---
 
@@ -307,9 +301,10 @@ ONU_Thesis/
 ├── docs/
 │   ├── ARCHITECTURE.md               # Настоящий документ (R1)
 │   ├── ROADMAP.md                    # Полная дорожная карта (R2)
+│   ├── DEPLOYMENT.md                 # Инструкция по сборке, запуску и приёмке
 │   └── DATA_ORGANIZATION_ASSESSMENT.md # Аудит и схема реорганизации данных (R3)
 ├── data/                             # Генерируемые статические данные (в .gitignore, read-only в runtime)
-│   └── processed/                    # Parquet + catalog.sqlite + manifest.parquet (результат ETL)
+│   └── processed/                    # Parquet + catalog.sqlite (результат ETL)
 ├── backend/
 │   ├── pyproject.toml
 │   ├── geomag_core/                  # Независимое вычислительное ядро (Pure Python/NumPy/SciPy)
@@ -320,43 +315,44 @@ ONU_Thesis/
 │   │   ├── analytic.py               # Разбиение NaN-подсегментов, Марпл-Гильберт, T_cut, S^(b), n (ф-ла 48)
 │   │   ├── polarization.py           # 2D Стокс (§5), 3D Means/Samson (§6), пороги Beta/Fisher
 │   │   ├── cross_welch.py            # Двухфазный кросс-спектр (совместная маска), m-число (|dlam| guard), FLR
-│   │   └── cross_wavelet.py          # CWT Морле, XWT, WTC (NaN/gap-COI), AR(1) Монте-Карло
+│   │   └── cross_wavelet.py          # CWT Морле, XWT, WTC (NaN/gap-COI), AR(1) Монте-Карло, компактный кэш
 │   ├── geomag_etl/                   # Конвейер нормализации -> data/processed/
 │   │   ├── __init__.py
 │   │   ├── build.py                  # Основной CLI: `python -m geomag_etl.build`
-│   │   ├── manifest.py               # Генерация SHA-256 manifest.parquet и таблицы raw_manifest
+│   │   ├── manifest.py               # Генерация SHA-256 таблицы raw_manifest в catalog.sqlite
 │   │   ├── intermagnet.py            # Парсер IAGA-2002 (Reported, HDZF, SOD, has_baseline, despike)
-│   │   ├── solar_wind.py             # Парсер SOLAR-1 (MAG + SWiPS flags/±30s/Pa->nPa + опц. NetCDF)
+│   │   ├── solar_wind.py             # Парсер SOLAR-1 (MAG + SWiPS flags/±30s/Pa->nPa)
 │   │   ├── omni.py                   # Позиционный парсер OMNI HRO_format.txt (поколоночные 99.9/999*)
 │   │   └── oulu.py                   # Слияние CSV OULU NM + внешняя карточка метаданных
 │   ├── geomag_api/                   # FastAPI приложение (`uvicorn geomag_api.main:app --workers 1`)
 │   │   ├── __init__.py
-│   │   ├── main.py                   # Приложение FastAPI, Origin/Host + token CSRF, раздача dist/, /api/shutdown
+│   │   ├── main.py                   # Приложение FastAPI, Host/Origin/Sec-Fetch-Site guard, dist/, /api/shutdown
 │   │   ├── schemas.py                # Pydantic/OpenAPI-схемы запросов и ответов
 │   │   ├── jobs.py                   # JobManager (ProcessPoolExecutor, Manager().Event/Queue, runtime.sqlite)
 │   │   ├── routes_catalog.py         # /api/catalog
-│   │   ├── routes_timeseries.py      # /api/timeseries (L1/BSN, сглаженный баллистический сдвиг)
+│   │   ├── routes_timeseries.py      # /api/timeseries/geomag, /api/timeseries/space-weather
 │   │   ├── routes_polarization.py    # /api/polarization
 │   │   ├── routes_cross.py           # /api/cross/welch
-│   │   └── routes_jobs.py            # /api/jobs + WS /ws/jobs/{job_id} + SSE
-│   ├── launcher.py                   # freeze_support(), pywebview + --browser + tray/UI shutdown
+│   │   └── routes_jobs.py            # /api/jobs + WS /ws/jobs/{job_id}
+│   ├── launcher.py                   # freeze_support(), pywebview + --browser + UI shutdown
 │   └── scripts/                      # CLI: etl_build.py (обёртка над geomag_etl.build), thesis_figures.py
 ├── tests/
 │   ├── verification/                 # Автотесты по .docx §11 (Случаи 0, A, B, C, D, E, Таблица 11)
 │   ├── unit/                         # Тесты ETL и core (HDZF, GUI/LON, GCK/NCK, VAL/OTT, SWiPS, OMNI, NaN-сегменты)
-│   └── integration/                  # Тесты FastAPI REST/WebSocket, кэша, Origin/CSRF и отмены задач
+│   └── integration/                  # Тесты FastAPI REST/WebSocket, кэша, Host/Origin и отмены задач
 ├── frontend/
-│   ├── package.json                  # React 18, TS, Vite, D3-geo, topojson-client, ECharts/uPlot, Vitest
+│   ├── package.json                  # React 18, TS, Vite, D3-geo, topojson-client, ECharts, Vitest
 │   └── src/
-│       ├── api/                      # REST + WebSocket клиент и типы TS
+│       ├── api/                      # REST + WebSocket (с polling-фолбэком) клиент и типы TS
 │       ├── utils/                    # Клиентская математика (p_crit, MLT=12/терминатор, эллипсы) + тесты Vitest
 │       ├── components/
 │       │   ├── StationMap/           # 100% офлайн-карта (D3-geo + world-110m.topojson), эллипсы, MLT=12
 │       │   ├── SyncedCharts/         # SOLAR-1, OMNI, OULU, Pc5/Pc6, Стокс с маскировкой, спектрограммы
 │       │   ├── CrossSpectralPanel/   # Welch (когерентность, фаза, m) и XWT/WTC с COI и стрелками
-│       │   └── JobMonitor/           # Индикатор прогресса Tier 3, отмена, выход --browser, экспорт SVG/PNG/CSV
+│       │   └── JobMonitor/           # Индикатор прогресса Tier 3, отмена, экспорт SVG/PNG/CSV
 │       └── store/
 └── packaging/
     ├── geomag_analyzer.spec          # PyInstaller --onedir спецификация (data/processed/ + frontend/dist/)
-    └── installer.iss                 # Скрипт Inno Setup (PrivilegesRequired=lowest)
+    ├── build_windows.py              # Сборка --onedir и GeoMagAnalyzer_Portable_Win64.zip
+    └── e2e_verify.py                 # Офлайн E2E-приёмка портативной сборки
 ```

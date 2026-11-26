@@ -11,7 +11,6 @@ from geomag_etl.config import DEFAULT_PROCESSED_DIR, DEFAULT_RAW_DIR
 from geomag_etl.solar_wind import (
     bin_swips_to_minute_grid,
     parse_solar1_swips_csvs,
-    read_solar1_netcdf,
 )
 
 
@@ -92,16 +91,3 @@ def test_swips_deterministic_30s_binning_and_tiebreak():
     assert np.isnan(binned.loc[1, "proton_n_cm3"])
     assert bool(binned.loc[2, "is_swips_valid"]) is False
     assert pd.isna(binned.loc[2, "swips_flags"])
-
-
-def test_optional_netcdf_diagnostics():
-    nc_dir = DEFAULT_RAW_DIR / "Solar Wind Data" / "SolarWind_Oct2026" / "SOLAR-1_NetCDF_original"
-    mag_nc = sorted(nc_dir.glob("oe_mag-l3_solar1_s20261004*.nc"))[0]
-    swips_nc = sorted(nc_dir.glob("oe_swips-l2_solar1_s20261004*.nc"))[0]
-
-    mag_info = read_solar1_netcdf(mag_nc)
-    assert mag_info["mag_flags_constant_invalid"] is True
-    assert "b_gse_sec" in mag_info["variables"]
-
-    swips_info = read_solar1_netcdf(swips_nc)
-    assert len(swips_info["all_fill_vars"]) == 23

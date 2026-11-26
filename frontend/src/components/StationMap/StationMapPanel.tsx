@@ -6,8 +6,6 @@ import {
   GitBranch,
   Globe2,
   Layers,
-  Maximize2,
-  Minimize2,
   Network,
   RotateCcw,
   ZoomIn,
@@ -44,7 +42,6 @@ import {
   scalePanOffsetForViewport,
   zoomMapViewportAtAnchor,
   type LabelCandidate,
-  type MapProjectionType,
   type MapRegionPreset,
   type MapViewportState,
 } from "../../utils/mapProjection";
@@ -144,9 +141,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
     }
   };
 
-  const [expanded, setExpanded] = useState(false);
   const [regionPreset, setRegionPreset] = useState<MapRegionPreset>("all");
-  const [projectionType, setProjectionType] = useState<MapProjectionType>("lcc");
   const [interactionMode, setInteractionMode] = useState<"pair" | "chain">("pair");
   const [pendingStart, setPendingStart] = useState<string | null>(null);
 
@@ -165,7 +160,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
   const [showMatrixArcs, setShowMatrixArcs] = useState(false);
   const [showOulu, setShowOulu] = useState(true);
   const [showAllLabels, setShowAllLabels] = useState(false);
-  const [ellipseSizeMode, setEllipseSizeMode] = useState<"log" | "sqrt">("log");
 
   const [viewport, setViewport] = useState<MapViewportState>({ zoom: 1, panX: 0, panY: 0 });
   const dragRef = useRef<{
@@ -186,7 +180,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
   const [hoveredArcKey, setHoveredArcKey] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const mapHeight = fillHeight ? stageHeight : expanded ? 520 : 380;
+  const mapHeight = fillHeight ? stageHeight : 380;
   const stageSizeRef = useRef({ width: stageWidth, height: mapHeight });
   stageSizeRef.current = { width: stageWidth, height: mapHeight };
 
@@ -297,7 +291,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
       const scaledPan = scalePanOffsetForViewport(
         { x: viewport.panX, y: viewport.panY },
         {
-          projectionType,
           regionPreset,
           stations: magnetometers,
           fromWidth: stageWidth,
@@ -307,7 +300,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
         },
       );
       const proj = createFittedMapProjection({
-        projectionType,
         regionPreset,
         width: w,
         height: h,
@@ -368,7 +360,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
           localNorthDeg,
           scaleMinI,
           scaleMaxI,
-          sizeMode: ellipseSizeMode,
         });
 
         const magCoords = geoToMagneticDipole(meta.lat_deg, meta.lon_deg);
@@ -637,7 +628,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
 
       const bandDesc =
         state.band === "Pc6" ? `Pc6 (600-${state.tMaxPc6Sec} s)` : "Pc5 (150-600 s)";
-      const caption = `${state.episodeId} | ${formatUtcFull(utcMs)} | ${bandDesc} | ${state.coordFrame} | alpha=${state.alpha} | proj=${projectionType.toUpperCase()}`;
+      const caption = `${state.episodeId} | ${formatUtcFull(utcMs)} | ${bandDesc} | ${state.coordFrame} | alpha=${state.alpha} | proj=LCC`;
 
       return {
         projection: proj,
@@ -683,7 +674,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
       };
     },
     [
-      projectionType,
       regionPreset,
       magnetometers,
       viewport.zoom,
@@ -702,7 +692,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
       state.alpha,
       state.episodeId,
       pendingStart,
-      ellipseSizeMode,
       showArcs,
       stationMetaMap,
       pairMetricsAtCursor,
@@ -881,7 +870,7 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
       L: state.L,
       M: state.M,
       window_samples: state.windowSamples,
-      projection: projectionType,
+      projection: "lcc",
       region_preset: regionPreset,
       active_pair: `${state.stationA}-${state.stationB}`,
       pair_gamma2: pairMetricsAtCursor?.gamma2 ?? "",
@@ -952,7 +941,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
     state.stationB,
     effectiveCursorMs,
     snapshotWindow,
-    projectionType,
     regionPreset,
     pairMetricsAtCursor,
     liveScene.stationNodes,
@@ -994,16 +982,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
             getCsv={getMapExportCsv}
             disabled={liveScene.stationNodes.length === 0}
           />
-          {!fillHeight && (
-            <button
-              type="button"
-              className="btn btn-sm btn-icon"
-              onClick={() => setExpanded((v) => !v)}
-              title={expanded ? "Restore map height" : "Increase map height"}
-            >
-              {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-            </button>
-          )}
           <button
             type="button"
             className="btn btn-sm btn-icon"
@@ -1033,25 +1011,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
                   {MAP_REGION_PRESETS[key].label}
                 </button>
               ))}
-            </div>
-
-            <div className="segmented" style={{ width: 112 }}>
-              <button
-                type="button"
-                className={projectionType === "lcc" ? "active" : ""}
-                onClick={() => setProjectionType("lcc")}
-                title="Lambert Conformal Conic projection"
-              >
-                LCC
-              </button>
-              <button
-                type="button"
-                className={projectionType === "laea" ? "active" : ""}
-                onClick={() => setProjectionType("laea")}
-                title="Lambert Azimuthal Equal-Area projection"
-              >
-                LAEA
-              </button>
             </div>
 
             <div className="segmented" style={{ width: 168 }}>
@@ -1165,15 +1124,6 @@ export const StationMapPanel: React.FC<StationMapPanelProps> = ({
                   >
                     <span>All Station Labels</span>
                     <span className="mono">{showAllLabels ? "ON" : "OFF"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="map-popover-item active"
-                    onClick={() => setEllipseSizeMode((m) => (m === "log" ? "sqrt" : "log"))}
-                    title="Toggle polarization ellipse radius scaling by power I"
-                  >
-                    <span>Ellipse Radius Scale</span>
-                    <span className="mono">{ellipseSizeMode === "log" ? "log(I)" : "√I"}</span>
                   </button>
                 </div>
               )}

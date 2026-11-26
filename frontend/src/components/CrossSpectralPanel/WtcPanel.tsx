@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { Play, RadioReceiver, Sparkles, XCircle } from "lucide-react";
 import { TERMINAL_JOB_STATUSES } from "../../api/client";
-import type { GapPolicy } from "../../api/types";
 import { useAnalysis } from "../../store/AnalysisContext";
 import { useCursor } from "../../store/CursorContext";
 import {
@@ -24,17 +23,12 @@ export const WtcPanel: React.FC = () => {
     wtcError,
     launchWtcJob,
     cancelWtcJob,
-    openWtcJobResult,
   } = useAnalysis();
   const { setCursorUtcMs } = useCursor();
 
   const [periodMinSec, setPeriodMinSec] = useState(120);
   const [periodMaxSec, setPeriodMaxSec] = useState(3600);
-  const [dj, setDj] = useState(1 / 12);
-  const [omega0, setOmega0] = useState(6);
-  const [gapPolicy, setGapPolicy] = useState<GapPolicy>("subsegments");
   const [nSurrogates, setNSurrogates] = useState(300);
-  const [seed, setSeed] = useState(42);
 
   const [mapView, setMapView] = useState<"wtc" | "xwt">("wtc");
   const [showContours, setShowContours] = useState(true);
@@ -50,12 +44,12 @@ export const WtcPanel: React.FC = () => {
     void launchWtcJob({
       period_min_sec: periodMinSec,
       period_max_sec: Math.max(periodMinSec + 60, periodMaxSec),
-      dj,
-      omega0,
-      gap_policy: gapPolicy,
+      dj: 1 / 12,
+      omega0: 6,
+      gap_policy: "subsegments",
       n_surrogates: nSurrogates,
       alpha: state.alpha,
-      seed,
+      seed: 42,
     });
   };
 
@@ -216,58 +210,6 @@ export const WtcPanel: React.FC = () => {
               value={nSurrogates}
               onCommit={setNSurrogates}
             />
-          </label>
-          <label className="field-label">
-            <span>Gap Policy</span>
-            <select
-              value={gapPolicy}
-              onChange={(e) => setGapPolicy(e.target.value as GapPolicy)}
-            >
-              <option value="subsegments">Subsegments</option>
-              <option value="gap_coi">Gap-COI</option>
-            </select>
-          </label>
-          <label className="field-label">
-            <span>δj / ω0</span>
-            <div className="field-row">
-              <select value={dj} onChange={(e) => setDj(Number(e.target.value))}>
-                <option value={1 / 12}>1/12</option>
-                <option value={1 / 8}>1/8</option>
-                <option value={1 / 6}>1/6</option>
-              </select>
-              <DraftNumberInput
-                min={4}
-                max={10}
-                step={1}
-                value={omega0}
-                onCommit={setOmega0}
-              />
-            </div>
-          </label>
-          <label className="field-label">
-            <span>Seed</span>
-            <DraftNumberInput
-              integer
-              value={seed}
-              onCommit={setSeed}
-            />
-          </label>
-          <label className="field-label">
-            <span>Stride</span>
-            <select
-              value={state.wtcStride}
-              onChange={(e) => {
-                const nextStride = Number(e.target.value);
-                dispatch({ type: "SET_WTC_STRIDE", stride: nextStride });
-                if (wtcResult) {
-                  void openWtcJobResult(wtcResult.job_id, nextStride);
-                }
-              }}
-            >
-              <option value={1}>×1 (1m)</option>
-              <option value={2}>×2 (2m)</option>
-              <option value={4}>×4 (4m)</option>
-            </select>
           </label>
 
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

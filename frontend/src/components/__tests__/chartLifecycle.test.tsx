@@ -80,7 +80,6 @@ function makeBaseContext(overrides: Partial<AnalysisContextValue> = {}): Analysi
       cursorUtcMs: Date.UTC(2026, 9, 10, 6, 0),
     },
     dispatch: vi.fn(),
-    auth: { checked: true, authenticated: true, requireAuth: true, error: null },
     health: null,
     catalog: null,
     activeEpisode: null,
@@ -109,7 +108,6 @@ function makeBaseContext(overrides: Partial<AnalysisContextValue> = {}): Analysi
     flrError: null,
     wtcError: null,
     baselineWarning: null,
-    authenticateWithToken: vi.fn(),
     refreshJobsAndCache: vi.fn(),
     launchWtcJob: vi.fn(),
     cancelWtcJob: vi.fn(),
@@ -574,7 +572,6 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
       core_version: "0.1.0",
       catalog_stations: 50,
       catalog_episodes: 4,
-      require_auth: false,
     };
     const catResp: CatalogResponse = {
       episodes: [
@@ -597,14 +594,6 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
     const flrAborted: boolean[] = [];
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/api/auth/session")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({ authenticated: true, session_token: "t", require_auth: false }),
-            { status: 200 },
-          ),
-        );
-      }
       if (url.includes("/api/health")) {
         return Promise.resolve(new Response(JSON.stringify(healthResp), { status: 200 }));
       }
@@ -922,7 +911,6 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
       core_version: "0.1.0",
       catalog_stations: 2,
       catalog_episodes: 1,
-      require_auth: false,
     };
     const catResp: CatalogResponse = {
       episodes: [
@@ -947,14 +935,6 @@ describe("Synced panel ECharts lifecycle (callback-ref regression C1)", () => {
 
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/api/auth/session")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({ authenticated: true, session_token: "t", require_auth: false }),
-            { status: 200 },
-          ),
-        );
-      }
       if (url.includes("/api/health")) {
         return Promise.resolve(new Response(JSON.stringify(healthResp), { status: 200 }));
       }

@@ -16,7 +16,7 @@ from .config import (
     EPISODES,
 )
 from .intermagnet import process_intermagnet
-from .manifest import enrich_manifest, scan_raw_manifest, write_manifest_parquet
+from .manifest import enrich_manifest, scan_raw_manifest
 from .omni import process_omni
 from .oulu import process_oulu
 from .solar_wind import process_solar1
@@ -47,7 +47,6 @@ def build_all(
         **oulu_stats,
     }
     enriched_manifest = enrich_manifest(manifest_df, all_file_stats)
-    write_manifest_parquet(enriched_manifest, processed_dir / "manifest.parquet")
 
     oulu_df = pd.DataFrame([oulu_station])
     for col in ("mean_vec_norm_nT", "cutoff_rigidity_gv", "barometric_coeff"):

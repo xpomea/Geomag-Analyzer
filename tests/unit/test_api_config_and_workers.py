@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 from geomag_api import config as api_config
-from geomag_api.data_store import canonicalize_station_pair
 
 
 def test_frozen_paths_and_portable_mode_marker(tmp_path: Path, monkeypatch):
@@ -24,40 +23,22 @@ def test_frozen_paths_and_portable_mode_marker(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(sys, "executable", str(exe_path), raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
     monkeypatch.delenv("GEOMAG_PROCESSED_DIR", raising=False)
-    monkeypatch.delenv("GEOMAG_STATIC_CACHE_DIR", raising=False)
     monkeypatch.delenv("GEOMAG_USER_DATA_DIR", raising=False)
     monkeypatch.delenv("GEOMAG_FRONTEND_DIST_DIR", raising=False)
 
     assert api_config.get_bundle_root() == internal_dir.resolve()
     assert api_config.get_app_dir() == install_dir.resolve()
 
-    # Without portable.mode marker, writable install_dir MUST resolve user_data to LOCALAPPDATA
-    settings_inno = api_config.ApiSettings.from_env()
-    assert settings_inno.processed_dir == internal_dir.resolve() / "data" / "processed"
-    assert settings_inno.static_cache_dir == internal_dir.resolve() / "data" / "cache"
-    assert settings_inno.frontend_dist_dir == internal_dir.resolve() / "frontend" / "dist"
-    assert settings_inno.user_data_dir == local_app_data / "GeoMagAnalyzer"
+    # Without portable.mode marker, writable install_dir resolves user_data to LOCALAPPDATA
+    settings_default = api_config.ApiSettings.from_env()
+    assert settings_default.processed_dir == internal_dir.resolve() / "data" / "processed"
+    assert settings_default.frontend_dist_dir == internal_dir.resolve() / "frontend" / "dist"
+    assert settings_default.user_data_dir == local_app_data / "GeoMagAnalyzer"
 
     # With portable.mode marker next to exe, writable install_dir uses ./user_data
     (install_dir / api_config.PORTABLE_MARKER_FILENAME).write_text("1", encoding="utf-8")
     settings_portable = api_config.ApiSettings.from_env()
     assert settings_portable.user_data_dir == install_dir.resolve() / "user_data"
-
-
-def test_canonicalize_station_pair_west_north_and_iaga_tiebreak():
-    ott = {"iaga_code": "OTT", "lon_deg": -75.55, "lat_deg": 45.40}
-    lvv = {"iaga_code": "LVV", "lon_deg": 23.75, "lat_deg": 49.90}
-    a, b, swapped = canonicalize_station_pair(lvv, ott)
-    assert (a["iaga_code"], b["iaga_code"], swapped) == ("OTT", "LVV", True)
-
-    a2, b2, swapped2 = canonicalize_station_pair(ott, lvv)
-    assert (a2["iaga_code"], b2["iaga_code"], swapped2) == ("OTT", "LVV", False)
-
-    # Same longitude -> North-first tie-break
-    south = {"iaga_code": "STH", "lon_deg": 20.0, "lat_deg": 45.0}
-    north = {"iaga_code": "NTH", "lon_deg": 20.0, "lat_deg": 65.0}
-    a3, b3, swapped3 = canonicalize_station_pair(south, north)
-    assert (a3["iaga_code"], b3["iaga_code"], swapped3) == ("NTH", "STH", True)
 
 
 def test_importing_workers_isolates_main_fastapi_and_has_no_numba():

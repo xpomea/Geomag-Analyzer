@@ -20,11 +20,9 @@ import {
   getHealth,
   getSpaceWeatherTimeseries,
   getWtcJobResult,
-  initAuthSession,
   listCacheEntries,
   listJobs,
   shutdownServer,
-  submitBootstrapToken,
   submitWtcJob,
   subscribeJobProgress,
 } from "../api/client";
@@ -64,17 +62,11 @@ import {
   type AnalysisState,
 } from "./analysisReducer";
 
-interface AuthStatusState {
-  checked: boolean;
-  authenticated: boolean;
-  requireAuth: boolean;
-  error: string | null;
-}
+const DEFAULT_WTC_STRIDE = 2;
 
 export interface AnalysisContextValue {
   state: AnalysisState;
   dispatch: React.Dispatch<AnalysisAction>;
-  auth: AuthStatusState;
   health: HealthResponse | null;
   catalog: CatalogResponse | null;
   activeEpisode: EpisodeInfo | null;
@@ -107,11 +99,10 @@ export interface AnalysisContextValue {
   wtcError: string | null;
   baselineWarning: string | null;
 
-  authenticateWithToken: (token: string) => Promise<void>;
   refreshJobsAndCache: () => Promise<void>;
   launchWtcJob: (overrides?: Partial<WTCJobRequest>) => Promise<JobStatusResponse | null>;
   cancelWtcJob: (jobId: string) => Promise<void>;
-  openWtcJobResult: (jobId: string, stride?: number) => Promise<void>;
+  openWtcJobResult: (jobId: string) => Promise<void>;
   loadFlrAtCursor: (windowIndexOverride?: number) => Promise<void>;
   setMapFlrChainActive?: (active: boolean) => void;
   triggerShutdown: () => Promise<void>;
@@ -235,12 +226,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     saveRecentPairs(state.recentPairs);
   }, [state.recentPairs]);
 
-  const [auth, setAuth] = useState<AuthStatusState>({
-    checked: false,
-    authenticated: false,
-    requireAuth: true,
-    error: null,
-  });
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
 
@@ -289,56 +274,8 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  // 1. Auth bootstrap on mount
+  // 1. Load catalog, health, initial jobs/cache on mount
   useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const res = await initAuthSession();
-        if (!active) return;
-        setAuth({
-          checked: true,
-          authenticated: res.authenticated,
-          requireAuth: res.requireAuth,
-          error: null,
-        });
-      } catch (err) {
-        if (!active) return;
-        setAuth({
-          checked: true,
-          authenticated: false,
-          requireAuth: true,
-          error: err instanceof Error ? err.message : "Session initialization failed",
-        });
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const authenticateWithToken = useCallback(async (token: string) => {
-    setAuth((prev) => ({ ...prev, error: null }));
-    try {
-      const res = await submitBootstrapToken(token);
-      setAuth({
-        checked: true,
-        authenticated: res.authenticated,
-        requireAuth: true,
-        error: null,
-      });
-    } catch (err) {
-      setAuth((prev) => ({
-        ...prev,
-        authenticated: false,
-        error: err instanceof ApiError ? err.detail : "Invalid or expired access token",
-      }));
-    }
-  }, []);
-
-  // 2. Load catalog, health, initial jobs/cache once authenticated
-  useEffect(() => {
-    if (!auth.checked || !auth.authenticated) return;
     const ctrl = new AbortController();
     setLoadingCatalog(true);
     setGlobalError(null);
@@ -373,7 +310,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.checked, auth.authenticated]);
+  }, []);
 
   const activeEpisode = useMemo(
     () => catalog?.episodes.find((e) => e.episode_id === state.episodeId) ?? null,
@@ -432,9 +369,9 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     [stationMetaMap, state.stationA, state.coordFrame, state.externalD0Deg],
   );
 
-  // 3. Fetch raw space weather once per episode (SOLAR-1 shift applied client-side!)
+  // 2. Fetch raw space weather once per episode (SOLAR-1 shift applied client-side!)
   useEffect(() => {
-    if (!auth.checked || !auth.authenticated || !catalog) return;
+    if (!catalog) return;
     const ctrl = new AbortController();
     setLoadingTimeseries(true);
 
@@ -462,27 +399,19 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
 
     return () => ctrl.abort();
-  }, [auth.checked, auth.authenticated, catalog, state.episodeId]);
+  }, [catalog, state.episodeId]);
 
-  // 4. Client-side ballistic/manual shift of SOLAR-1 (< 5 ms)
+  // 3. Client-side ballistic/manual shift of SOLAR-1 (< 5 ms)
   const shiftedSolar1 = useMemo<ShiftedSolar1Output | null>(() => {
     if (!rawSpaceWeather) return null;
     return applySolar1Shift(rawSpaceWeather.solar1, state.solar1ShiftMode, {
       manualLagMin: state.manualLagMin,
-      refDistanceKm: state.refDistanceKm,
-      smoothWindowMin: state.smoothWindowMin,
     });
-  }, [
-    rawSpaceWeather,
-    state.solar1ShiftMode,
-    state.manualLagMin,
-    state.refDistanceKm,
-    state.smoothWindowMin,
-  ]);
+  }, [rawSpaceWeather, state.solar1ShiftMode, state.manualLagMin]);
 
-  // 5. Fetch magnetometer series + polarization (NOT dependent on alpha!)
+  // 4. Fetch magnetometer series + polarization (NOT dependent on alpha!)
   useEffect(() => {
-    if (!auth.checked || !auth.authenticated || !catalog) return;
+    if (!catalog) return;
     if (baselineWarning) {
       setGeomag(null);
       setPolarizationRaw(null);
@@ -554,8 +483,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     return () => ctrl.abort();
   }, [
-    auth.checked,
-    auth.authenticated,
     catalog,
     baselineWarning,
     state.episodeId,
@@ -599,10 +526,10 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     state.spectrumType,
   ]);
 
-  // 7. Fetch Welch pair when cross Welch tab is active (alpha NOT in deps!)
+  // 6. Fetch Welch pair when cross Welch tab is active (alpha NOT in deps!)
   useEffect(() => {
-    if (!auth.checked || !auth.authenticated || !catalog) return;
-    if (state.activeCrossTab !== "welch") return;
+    if (!catalog) return;
+    if (state.activeDeckTab !== "welch") return;
 
     const reqSig = currentWelchSig;
     const warnA = getStationBaselineWarning(
@@ -668,11 +595,9 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     return () => ctrl.abort();
   }, [
-    auth.checked,
-    auth.authenticated,
     catalog,
     stationMetaMap,
-    state.activeCrossTab,
+    state.activeDeckTab,
     currentWelchSig,
     state.episodeId,
     state.stationA,
@@ -719,9 +644,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     for (const id of activeIds) {
       if (wsSubsRef.current.has(id)) continue;
       const unsub = subscribeJobProgress(id, {
-        onTransport: (transport) => {
-          dispatch({ type: "SET_JOB_TRANSPORT", jobId: id, transport });
-        },
         onUpdate: (job) => {
           dispatch({ type: "UPSERT_JOB", job });
           if (TERMINAL_JOB_STATUSES.has(job.status)) {
@@ -773,11 +695,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [flrProfileRaw, state.alpha]);
 
   const openWtcJobResult = useCallback(
-    async (jobId: string, strideOverride?: number) => {
-      const effStride = strideOverride ?? state.wtcStride;
-      if (strideOverride !== undefined && strideOverride !== state.wtcStride) {
-        dispatch({ type: "SET_WTC_STRIDE", stride: strideOverride });
-      }
+    async (jobId: string) => {
       wtcAbortRef.current?.abort();
       const ctrl = new AbortController();
       wtcAbortRef.current = ctrl;
@@ -785,7 +703,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setLoadingWtcResult(true);
       setWtcError(null);
       try {
-        const res = await getWtcJobResult(jobId, effStride, ctrl.signal);
+        const res = await getWtcJobResult(jobId, DEFAULT_WTC_STRIDE, ctrl.signal);
         if (ctrl.signal.aborted) return;
 
         const ep = catalog?.episodes.find((e) => e.episode_id === res.episode_id);
@@ -850,7 +768,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       }
     },
-    [state.wtcStride, catalog, stationMetaMap],
+    [catalog, stationMetaMap],
   );
 
   // Auto-load active WTC result once its job completes/caches
@@ -871,9 +789,9 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       (activeJobObj.status === "completed" || activeJobObj.status === "cached") &&
       wtcResult?.job_id !== activeJobObj.job_id
     ) {
-      void openWtcJobResult(activeJobObj.job_id, state.wtcStride);
+      void openWtcJobResult(activeJobObj.job_id);
     }
-  }, [activeJobObj, wtcResult?.job_id, openWtcJobResult, state.wtcStride]);
+  }, [activeJobObj, wtcResult?.job_id, openWtcJobResult]);
 
   const launchWtcJob = useCallback(
     async (overrides: Partial<WTCJobRequest> = {}) => {
@@ -902,7 +820,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const job = await submitWtcJob(req);
         dispatch({ type: "UPSERT_JOB", job });
         dispatch({ type: "SET_ACTIVE_WTC_JOB", jobId: job.job_id });
-        dispatch({ type: "SET_ACTIVE_CROSS_TAB", tab: "wtc" });
+        dispatch({ type: "SET_ACTIVE_DECK_TAB", tab: "wtc" });
         return job;
       } catch (err) {
         setWtcError(err instanceof ApiError ? err.detail : (err as Error).message);
@@ -1067,7 +985,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     () => ({
       state,
       dispatch,
-      auth,
       health,
       catalog,
       activeEpisode,
@@ -1096,7 +1013,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       flrError,
       wtcError,
       baselineWarning,
-      authenticateWithToken,
       refreshJobsAndCache,
       launchWtcJob,
       cancelWtcJob,
@@ -1107,7 +1023,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }),
     [
       state,
-      auth,
       health,
       catalog,
       activeEpisode,
@@ -1136,7 +1051,6 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       flrError,
       wtcError,
       baselineWarning,
-      authenticateWithToken,
       refreshJobsAndCache,
       launchWtcJob,
       cancelWtcJob,
@@ -1147,7 +1061,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   );
 
   const isFlrAutoNeeded = state.activeDeckTab === "welch" || mapFlrChainActive;
-  const isFlrReady = auth.checked && auth.authenticated && Boolean(catalog);
+  const isFlrReady = Boolean(catalog);
 
   return (
     <AnalysisContext.Provider value={value}>

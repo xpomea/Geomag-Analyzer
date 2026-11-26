@@ -13,7 +13,6 @@ export interface ExportToolbarProps {
   svgHeight?: number;
   getCsv?: () => string | null;
   disabled?: boolean;
-  compact?: boolean;
 }
 
 export const ExportToolbar: React.FC<ExportToolbarProps> = ({

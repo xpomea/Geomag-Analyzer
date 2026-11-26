@@ -314,7 +314,6 @@ describe("Publication export subsystem (SVG, PNG 300 DPI, CSV, Windows filenames
     const h = 440;
     const world = getWorldGeoData();
     const proj = createFittedMapProjection({
-      projectionType: "lcc",
       regionPreset: "all",
       width: w,
       height: h,

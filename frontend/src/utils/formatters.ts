@@ -1,7 +1,3 @@
-export function parseTimestampsMs(isoList: string[]): number[] {
-  return isoList.map((iso) => Date.parse(iso));
-}
-
 export function formatUtcShort(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
   const d = new Date(ms);

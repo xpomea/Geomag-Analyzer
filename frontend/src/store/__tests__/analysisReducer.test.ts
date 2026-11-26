@@ -10,8 +10,28 @@ import {
   MIN_ZOOM_SPAN_MS,
   analysisReducer,
   getStationBaselineWarning,
-  selectBackendFetchSignature,
 } from "../analysisReducer";
+
+function serverFetchSnapshot(s: typeof INITIAL_ANALYSIS_STATE) {
+  return {
+    episodeId: s.episodeId,
+    stationA: s.stationA,
+    band: s.band,
+    tMaxPc6Sec: s.tMaxPc6Sec,
+    method: s.method,
+    coordFrame: s.coordFrame,
+    externalD0Deg: s.externalD0Deg,
+    L: s.L,
+    M: s.M,
+    windowSamples: s.windowSamples,
+    stepSamples: s.stepSamples,
+    nw: s.nw,
+    spectrumType: s.spectrumType,
+    oversampleM: s.oversampleM,
+    oversampleMethod: s.oversampleMethod,
+    orderN: s.orderN,
+  };
+}
 
 const SAMPLE_EPISODE: EpisodeInfo = {
   episode_id: "storm_20261004_05",
@@ -72,8 +92,8 @@ describe("analysisReducer & state guards", () => {
     expect(next.cursorUtcMs).not.toBeNull();
   });
 
-  it("keeps backend fetch signature invariant under client-only alpha and solar1 shift actions", () => {
-    const sig0 = selectBackendFetchSignature(INITIAL_ANALYSIS_STATE);
+  it("keeps backend fetch parameters invariant under client-only alpha and solar1 shift actions", () => {
+    const sig0 = serverFetchSnapshot(INITIAL_ANALYSIS_STATE);
     const s1 = analysisReducer(INITIAL_ANALYSIS_STATE, { type: "SET_ALPHA", alpha: 0.01 });
     const s2 = analysisReducer(s1, { type: "SET_SOLAR1_SHIFT", mode: "manual" });
     const s3 = analysisReducer(s2, { type: "SET_MANUAL_LAG", lagMin: 55 });
@@ -84,10 +104,10 @@ describe("analysisReducer & state guards", () => {
     const s5 = analysisReducer(s4, { type: "SET_EXPORT_THEME", theme: "dark" });
 
     expect(s5.exportTheme).toBe("dark");
-    expect(selectBackendFetchSignature(s5)).toBe(sig0);
+    expect(serverFetchSnapshot(s5)).toEqual(sig0);
 
     const sMethod = analysisReducer(s4, { type: "SET_METHOD", method: "variant_b_sos" });
-    expect(selectBackendFetchSignature(sMethod)).not.toBe(sig0);
+    expect(serverFetchSnapshot(sMethod)).not.toEqual(sig0);
   });
 
   it("harmonizes crossComponent when toggling XYZ <-> XmYm and clamps zoom bounds", () => {
@@ -150,7 +170,7 @@ describe("analysisReducer & state guards", () => {
     expect(s2.jobs[0].status).toBe("completed");
   });
 
-  it("handles OPEN_WTC_JOB cross-episode switch, SET_WTC_STRIDE, SET_EXTERNAL_D0_B, and windowSamples >= L guard", () => {
+  it("handles OPEN_WTC_JOB cross-episode switch, SET_EXTERNAL_D0_B, and windowSamples >= L guard", () => {
     const b0 = Date.parse(SAMPLE_EPISODE.start_utc);
     const b1 = Date.parse(SAMPLE_EPISODE.end_utc);
     const opened = analysisReducer(INITIAL_ANALYSIS_STATE, {
@@ -167,14 +187,11 @@ describe("analysisReducer & state guards", () => {
     expect(opened.stationA).toBe("BEL");
     expect(opened.stationB).toBe("WNG");
     expect(opened.crossComponent).toBe("Ym");
-    expect(opened.activeCrossTab).toBe("wtc");
+    expect(opened.activeDeckTab).toBe("wtc");
     expect(opened.activeWtcJobId).toBe("wtc-old");
     expect(opened.viewRangeMs).toEqual([b0, b1]);
 
-    const strided = analysisReducer(opened, { type: "SET_WTC_STRIDE", stride: 4 });
-    expect(strided.wtcStride).toBe(4);
-
-    const d0b = analysisReducer(strided, { type: "SET_EXTERNAL_D0_B", d0Deg: 4.5 });
+    const d0b = analysisReducer(opened, { type: "SET_EXTERNAL_D0_B", d0Deg: 4.5 });
     expect(d0b.externalD0DegB).toBe(4.5);
 
     const smallWin = analysisReducer(d0b, { type: "SET_WELCH_PARAMS", L: 256, windowSamples: 128 });
@@ -204,23 +221,21 @@ describe("analysisReducer & state guards", () => {
     expect(openedWithD0.externalD0DegB).toBeNull();
   });
 
-  it("syncs activeDeckTab and activeCrossTab cleanly without changing backend fetch signature", () => {
-    const sig0 = selectBackendFetchSignature(INITIAL_ANALYSIS_STATE);
+  it("updates activeDeckTab cleanly without changing backend fetch parameters", () => {
+    const sig0 = serverFetchSnapshot(INITIAL_ANALYSIS_STATE);
     const sWelch = analysisReducer(INITIAL_ANALYSIS_STATE, {
       type: "SET_ACTIVE_DECK_TAB",
       tab: "welch",
     });
     expect(sWelch.activeDeckTab).toBe("welch");
-    expect(sWelch.activeCrossTab).toBe("welch");
-    expect(selectBackendFetchSignature(sWelch)).toBe(sig0);
+    expect(serverFetchSnapshot(sWelch)).toEqual(sig0);
 
     const sStokes = analysisReducer(sWelch, {
       type: "SET_ACTIVE_DECK_TAB",
       tab: "stokes",
     });
     expect(sStokes.activeDeckTab).toBe("stokes");
-    expect(sStokes.activeCrossTab).toBe("spectrogram");
-    expect(selectBackendFetchSignature(sStokes)).toBe(sig0);
+    expect(serverFetchSnapshot(sStokes)).toEqual(sig0);
 
     const sWtc = analysisReducer(sStokes, {
       type: "OPEN_WTC_JOB",
@@ -232,7 +247,6 @@ describe("analysisReducer & state guards", () => {
       coordFrame: "XYZ",
     });
     expect(sWtc.activeDeckTab).toBe("wtc");
-    expect(sWtc.activeCrossTab).toBe("wtc");
   });
 
   it("tracks MRU recentPairs with A-B/B-A deduplication, A===B guard, recordRecent=false, and safe localStorage", () => {

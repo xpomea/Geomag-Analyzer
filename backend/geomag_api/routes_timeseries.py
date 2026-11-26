@@ -7,7 +7,6 @@ from fastapi import APIRouter, Query
 from .data_store import DataStore
 from .deps import StoreDep
 from .schemas import (
-    CombinedTimeseriesResponse,
     GeomagTimeseriesResponse,
     OmniSeries,
     OuluSeries,
@@ -175,44 +174,3 @@ def get_space_weather_timeseries(
         start_utc=start_utc,
         end_utc=end_utc,
     )
-
-
-@router.get("", response_model=CombinedTimeseriesResponse)
-def get_combined_timeseries(
-    store: StoreDep,
-    episode_id: str = Query(...),
-    station_iaga: str = Query(...),
-    coord_frame: str = Query(default="XYZ"),
-    external_d0_deg: float | None = Query(default=None),
-    solar1_shift: str = Query(default="l1_raw"),
-    manual_lag_min: float | None = Query(default=None),
-    ref_distance_km: float = Query(default=1_400_000.0, gt=0.0),
-    smooth_window_min: int = Query(default=31, ge=1),
-    include_omni: bool = Query(default=True),
-    include_oulu: bool = Query(default=True),
-    start_utc: str | None = Query(default=None),
-    end_utc: str | None = Query(default=None),
-) -> CombinedTimeseriesResponse:
-    """Fetch aligned magnetometer + space-weather panels in one synchronous request."""
-    geomag = _build_geomag_response(
-        store,
-        episode_id=episode_id,
-        station_iaga=station_iaga,
-        coord_frame=coord_frame,
-        external_d0_deg=external_d0_deg,
-        start_utc=start_utc,
-        end_utc=end_utc,
-    )
-    space_weather = _build_space_weather_response(
-        store,
-        episode_id=episode_id,
-        solar1_shift=solar1_shift,
-        manual_lag_min=manual_lag_min,
-        ref_distance_km=ref_distance_km,
-        smooth_window_min=smooth_window_min,
-        include_omni=include_omni,
-        include_oulu=include_oulu,
-        start_utc=start_utc,
-        end_utc=end_utc,
-    )
-    return CombinedTimeseriesResponse(geomag=geomag, space_weather=space_weather)

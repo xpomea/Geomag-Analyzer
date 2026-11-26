@@ -63,16 +63,14 @@ def _validate_cache_args(category: str, cache_key: str) -> None:
 
 
 class CacheManager:
-    """Manages static (read-only) and user (read-write) NPZ caches plus runtime.sqlite index."""
+    """Manages user (read-write) NPZ caches plus runtime.sqlite index."""
 
     def __init__(
         self,
         *,
-        static_cache_dir: Path,
         user_cache_dir: Path,
         runtime_db_path: Path,
     ) -> None:
-        self.static_cache_dir = Path(static_cache_dir)
         self.user_cache_dir = Path(user_cache_dir)
         self.runtime_db_path = Path(runtime_db_path)
         self._lock = threading.RLock()
@@ -113,15 +111,12 @@ class CacheManager:
         _validate_cache_args(category, cache_key)
         return self.user_cache_dir / category / f"{cache_key}.npz"
 
-    def find(self, category: str, cache_key: str) -> tuple[Path, str] | None:
-        """Look up cached NPZ file in static (read-only) cache first, then user cache."""
+    def find(self, category: str, cache_key: str) -> Path | None:
+        """Look up cached NPZ file in user cache."""
         _validate_cache_args(category, cache_key)
-        static_path = self.static_cache_dir / category / f"{cache_key}.npz"
-        if static_path.is_file():
-            return static_path, "static"
         user_path = self.user_cache_dir / category / f"{cache_key}.npz"
         if user_path.is_file():
-            return user_path, "user"
+            return user_path
         return None
 
     def register_entry(
@@ -175,16 +170,15 @@ class CacheManager:
     ) -> tuple[Phase1StationSpectra, bool]:
         """Load Phase 1 station spectra from cache or compute and store atomically."""
         with self._lock_for_key(cache_key):
-            hit = self.find("spectra_phase1", cache_key)
-            if hit is not None:
-                path, source = hit
+            path = self.find("spectra_phase1", cache_key)
+            if path is not None:
                 spectra = load_phase1_cache(path)
                 if spectra.cache_key == cache_key:
                     self.register_entry(
                         cache_key=cache_key,
                         category="spectra_phase1",
                         file_path=path,
-                        source=source,
+                        source="user",
                         params=params,
                     )
                     return spectra, True

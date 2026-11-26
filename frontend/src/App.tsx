@@ -5,7 +5,6 @@ import { SpectrogramPanel } from "./components/CrossSpectralPanel/SpectrogramPan
 import { WelchCrossPanel } from "./components/CrossSpectralPanel/WelchCrossPanel";
 import { WtcPanel } from "./components/CrossSpectralPanel/WtcPanel";
 import { JobMonitorPanel } from "./components/JobMonitor/JobMonitorPanel";
-import { AuthGate } from "./components/Layout/AuthGate";
 import { ControlSidebar } from "./components/Layout/ControlSidebar";
 import { TimeScrubberBar } from "./components/Layout/TimeScrubberBar";
 import { TopBar } from "./components/Layout/TopBar";
@@ -209,9 +208,7 @@ const Workbench: React.FC = () => {
 export const App: React.FC = () => {
   return (
     <AnalysisProvider>
-      <AuthGate>
-        <Workbench />
-      </AuthGate>
+      <Workbench />
     </AnalysisProvider>
   );
 };

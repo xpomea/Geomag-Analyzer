@@ -6,7 +6,6 @@ import json
 import math
 import sqlite3
 import threading
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -100,32 +99,6 @@ def resolve_component_index(component: str, coord_frame: str) -> tuple[str, int]
             "(expected 'Xm', 'Ym', or 'Z')."
         )
     raise ValueError(f"Unsupported coord_frame {coord_frame!r}; expected 'XYZ' or 'XmYm'.")
-
-
-def canonicalize_station_pair(
-    meta_a: Mapping[str, Any],
-    meta_b: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], bool]:
-    """Order a pair West-first (lon asc), tie-break North-first (lat desc), then IAGA asc."""
-    lon_a = float(meta_a["lon_deg"])
-    lon_b = float(meta_b["lon_deg"])
-    if abs(lon_a - lon_b) > 1e-9:
-        if lon_a < lon_b:
-            return dict(meta_a), dict(meta_b), False
-        return dict(meta_b), dict(meta_a), True
-
-    lat_a = float(meta_a["lat_deg"])
-    lat_b = float(meta_b["lat_deg"])
-    if abs(lat_a - lat_b) > 1e-9:
-        if lat_a > lat_b:
-            return dict(meta_a), dict(meta_b), False
-        return dict(meta_b), dict(meta_a), True
-
-    code_a = str(meta_a["iaga_code"])
-    code_b = str(meta_b["iaga_code"])
-    if code_a <= code_b:
-        return dict(meta_a), dict(meta_b), False
-    return dict(meta_b), dict(meta_a), True
 
 
 @dataclass(frozen=True)

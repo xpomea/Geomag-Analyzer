@@ -1,9 +1,7 @@
-"""Integration tests for Tier 3 WTC jobs, WebSocket/SSE progress, cancel, security, and uvicorn."""
+"""Integration tests for Tier 3 WTC jobs, WebSocket progress, cancel, security, and uvicorn."""
 
 from __future__ import annotations
 
-import json
-import logging
 import multiprocessing
 import os
 import socket
@@ -20,7 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 from geomag_etl.config import DEFAULT_PROCESSED_DIR
 
 
-def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
+def test_security_host_origin_and_shutdown(make_test_client):
     shutdown_called = {"flag": False}
 
     def _on_shutdown() -> None:
@@ -38,7 +36,7 @@ def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
     assert openapi.status_code == 200
     assert "/api/jobs/wtc" in openapi.json()["paths"]
 
-    # Bad Host or Origin (incl. cross-port localhost attack) must return 403
+    # Bad Host, bad Origin, cross-port localhost attack, or Sec-Fetch-Site: cross-site -> 403
     assert client.get("/api/health", headers={"Host": "evil.example"}).status_code == 403
     assert (
         client.get("/api/health", headers={"Origin": "https://evil.example"}).status_code == 403
@@ -58,6 +56,12 @@ def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
         == 403
     )
     assert (
+        client.get("/api/health", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    )
+    assert (
+        client.post("/api/shutdown", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    )
+    assert (
         client.get(
             "/api/health",
             headers={"Host": "127.0.0.1:8000", "Origin": "http://127.0.0.1:8000"},
@@ -65,58 +69,36 @@ def test_security_host_origin_csrf_bootstrap_and_shutdown(make_test_client):
         == 200
     )
 
-    # Unauthenticated GET on data/jobs endpoints and mutations must return 401
-    assert client.get("/api/catalog").status_code == 401
-    assert client.get("/api/jobs").status_code == 401
-    assert (
-        client.post(
-            "/api/polarization",
-            json={"episode_id": "storm_20261004_05", "station_iaga": "BEL"},
-        ).status_code
-        == 401
-    )
-    assert client.post("/api/shutdown").status_code == 401
+    # Same-origin catalog works directly without bootstrap cookies
+    cat = client.get("/api/catalog")
+    assert cat.status_code == 200 and len(cat.json()["episodes"]) == 4
 
-    # Cookie before bootstrap is unauthorized
-    assert client.get("/api/auth/session").status_code == 401
-
-    # One-time bootstrap succeeds once and fails on reuse
-    boot1 = client.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
-    assert boot1.status_code == 200
-    sess_tok = boot1.json()["session_token"]
-    boot2 = client.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
-    assert boot2.status_code == 401
-
-    # Session cookie now unlocks GET /api/auth/session and GET /api/catalog
-    sess_res = client.get("/api/auth/session")
-    assert sess_res.status_code == 200
-    assert sess_res.json()["session_token"] == sess_tok
-    assert client.get("/api/catalog/episodes").status_code == 200
-
-    # Evil Origin / cross-port Origin on WebSocket must be rejected before accept
+    # Evil Origin / cross-site Sec-Fetch-Site on WebSocket must be rejected before accept
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(
             "/ws/jobs/nonexistent", headers={"Origin": "https://evil.example"}
         ):
             pass
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            "/ws/jobs/nonexistent", headers={"Sec-Fetch-Site": "cross-site"}
+        ):
+            pass
 
-    # Valid X-Session-Token triggers /api/shutdown
-    sd = client.post("/api/shutdown", headers={"X-Session-Token": sess_tok})
+    # Local same-origin POST triggers /api/shutdown
+    sd = client.post("/api/shutdown")
     assert sd.status_code == 200
     assert shutdown_called["flag"] is True
 
     # Headless server without shutdown_callback reports can_shutdown=False and 501
-    c_no_sd, s_no_sd = make_test_client(
+    c_no_sd, _ = make_test_client(
         user_data_dir=settings.user_data_dir / "no_sd",
     )
     assert c_no_sd.get("/api/health").json()["can_shutdown"] is False
-    tok2 = c_no_sd.get(f"/api/auth/bootstrap?token={s_no_sd.bootstrap_token}").json()[
-        "session_token"
-    ]
-    assert c_no_sd.post("/api/shutdown", headers={"X-Session-Token": tok2}).status_code == 501
+    assert c_no_sd.post("/api/shutdown").status_code == 501
 
 
-def test_wtc_lifecycle_ws_progress_cache_hit_and_sse(api_client):
+def test_wtc_lifecycle_ws_progress_and_cache_hit(api_client):
     client, headers, settings = api_client
     catalog_before = (DEFAULT_PROCESSED_DIR / "catalog.sqlite").read_bytes()
 
@@ -194,19 +176,7 @@ def test_wtc_lifecycle_ws_progress_cache_hit_and_sse(api_client):
         -payload1["wtc_phase_deg"][0][10], abs=1e-9
     )
 
-    # 5) Verify SSE fallback on cached/completed job (even with Accept-Encoding: gzip)
-    with client.stream(
-        "GET",
-        f"/api/jobs/{job2['job_id']}/events",
-        headers={"Accept-Encoding": "gzip"},
-    ) as sse:
-        assert sse.status_code == 200
-        data_lines = [ln for ln in sse.iter_lines() if ln.startswith("data: ")]
-        assert data_lines
-        evt = json.loads(data_lines[-1][6:])
-        assert evt["status"] == "cached"
-
-    # 6) Cache index lists cross_wtc artifact
+    # 5) Cache index lists cross_wtc artifact
     c_list = client.get("/api/cache?category=cross_wtc")
     assert c_list.status_code == 200
     assert any(entry["cache_key"] == job1["cache_key"] for entry in c_list.json())
@@ -342,10 +312,7 @@ def test_orphaned_jobs_reconciled_on_startup_and_cancel(tmp_path: Path, make_tes
     from geomag_api.cache import CacheManager, utc_now_iso
 
     ud = tmp_path / "orphan_ud"
-    sc = tmp_path / "orphan_sc"
-    sc.mkdir(parents=True, exist_ok=True)
     cm = CacheManager(
-        static_cache_dir=sc,
         user_cache_dir=ud / "user_cache",
         runtime_db_path=ud / "runtime.sqlite",
     )
@@ -370,11 +337,7 @@ def test_orphaned_jobs_reconciled_on_startup_and_cancel(tmp_path: Path, make_tes
     finally:
         conn.close()
 
-    client, settings = make_test_client(user_data_dir=ud, static_cache_dir=sc)
-    tok = client.get(
-        f"/api/auth/bootstrap?token={settings.bootstrap_token}"
-    ).json()["session_token"]
-    hdrs = {"X-Session-Token": tok}
+    client, _ = make_test_client(user_data_dir=ud)
 
     # On startup JobManager reconciled prior queued/running/cancelling jobs to failed
     for jid in ("stale-run", "stale-canc"):
@@ -402,7 +365,7 @@ def test_orphaned_jobs_reconciled_on_startup_and_cancel(tmp_path: Path, make_tes
     finally:
         conn2.close()
 
-    r_del = client.delete("/api/jobs/orphan-live", headers=hdrs)
+    r_del = client.delete("/api/jobs/orphan-live")
     assert r_del.status_code == 200
     assert r_del.json()["status"] == "cancelled"
 
@@ -463,7 +426,7 @@ def test_orphaned_jobs_reconciled_on_startup_and_cancel(tmp_path: Path, make_tes
         "start_utc": "2026-10-04T00:00:00Z",
         "end_utc": "2026-10-04T05:59:00Z",
     }
-    sub1 = client.post("/api/jobs/wtc", headers=hdrs, json=wtc_req).json()
+    sub1 = client.post("/api/jobs/wtc", json=wtc_req).json()
     assert sub1["job_id"] != "fake-stale-ck"
     stale_after = client.get("/api/jobs/fake-stale-ck").json()
     assert stale_after["status"] == "failed"
@@ -484,7 +447,6 @@ async def test_async_httpx_transport_and_endpoints(tmp_path: Path):
 
     settings = ApiSettings(
         processed_dir=DEFAULT_PROCESSED_DIR,
-        static_cache_dir=tmp_path / "static_cache",
         user_data_dir=tmp_path / "user_data",
         max_workers=1,
     )
@@ -498,12 +460,13 @@ async def test_async_httpx_transport_and_endpoints(tmp_path: Path):
             assert h.status_code == 200
             assert h.json()["catalog_stations"] == 50
 
-            assert (await ac.get("/api/catalog/episodes")).status_code == 401
-            boot = await ac.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
-            assert boot.status_code == 200
+            cat = await ac.get("/api/catalog")
+            assert cat.status_code == 200
+            assert len(cat.json()["episodes"]) == 4
+            assert len(cat.json()["stations"]) == 50
 
-            cat = await ac.get("/api/catalog/episodes")
-            assert cat.status_code == 200 and len(cat.json()) == 4
+            evil = await ac.get("/api/catalog", headers={"Origin": "https://evil.example"})
+            assert evil.status_code == 403
 
 
 def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
@@ -512,10 +475,7 @@ def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
         port = int(s.getsockname()[1])
 
     env = dict(os.environ)
-    env.pop("GEOMAG_REQUIRE_AUTH", None)
-    env.pop("GEOMAG_BOOTSTRAP_TOKEN", None)
     env["GEOMAG_USER_DATA_DIR"] = str(tmp_path / "uvicorn_user_data")
-    env["GEOMAG_STATIC_CACHE_DIR"] = str(tmp_path / "uvicorn_static_cache")
 
     proc = subprocess.Popen(
         [
@@ -534,7 +494,6 @@ def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
         stderr=subprocess.PIPE,
         env=env,
     )
-    stderr_bytes = b""
     try:
         base_url = f"http://127.0.0.1:{port}"
         ready = False
@@ -554,13 +513,10 @@ def test_uvicorn_live_subprocess_smoke(tmp_path: Path):
     finally:
         proc.terminate()
         try:
-            _, stderr_bytes = proc.communicate(timeout=5.0)
+            proc.communicate(timeout=5.0)
         except subprocess.TimeoutExpired:
             proc.kill()
-            _, stderr_bytes = proc.communicate(timeout=5.0)
-
-    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-    assert "auto-generated one-time bootstrap token: ?token=" in stderr_text
+            proc.communicate(timeout=5.0)
 
 
 def test_spawn_worker_enforces_single_blas_threads_without_loading_main():
@@ -576,32 +532,3 @@ def test_spawn_worker_enforces_single_blas_threads_without_loading_main():
     assert info["numexpr_num_threads"] == "1"
     assert info["main_loaded"] is False
     assert info["fastapi_loaded"] is False
-
-
-def test_bootstrap_token_logged_when_autogenerated_and_cookie_secure_flag(
-    make_test_client, caplog
-):
-    with caplog.at_level(logging.INFO, logger="geomag_api"):
-        c_auto, s_auto = make_test_client()
-        assert any(s_auto.bootstrap_token in rec.getMessage() for rec in caplog.records)
-
-        # Plain HTTP omits Secure; X-Forwarded-Proto: https sets Secure
-        r_https = c_auto.get(
-            f"/api/auth/bootstrap?token={s_auto.bootstrap_token}",
-            headers={"X-Forwarded-Proto": "https"},
-        )
-        assert r_https.status_code == 200
-        set_cookie_https = r_https.headers.get("set-cookie", "").lower()
-        assert "httponly" in set_cookie_https and "secure" in set_cookie_https
-
-    caplog.clear()
-    with caplog.at_level(logging.INFO, logger="geomag_api"):
-        c_explicit, s_exp = make_test_client(
-            bootstrap_token="explicit-fixed-token",
-            user_data_dir=s_auto.user_data_dir / "explicit",
-        )
-        assert not any("explicit-fixed-token" in rec.getMessage() for rec in caplog.records)
-        r_http = c_explicit.get("/api/auth/bootstrap?token=explicit-fixed-token")
-        assert r_http.status_code == 200
-        set_cookie_http = r_http.headers.get("set-cookie", "").lower()
-        assert "httponly" in set_cookie_http and "; secure" not in set_cookie_http

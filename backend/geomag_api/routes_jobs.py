@@ -1,9 +1,8 @@
-"""Async Tier 3 jobs router: /api/jobs, WS /ws/jobs/{job_id}, SSE, and /api/cache."""
+"""Async Tier 3 jobs router: /api/jobs, WS /ws/jobs/{job_id}, and /api/cache."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
@@ -12,25 +11,24 @@ from fastapi import (
     APIRouter,
     HTTPException,
     Query,
-    Request,
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import StreamingResponse
 
 import geomag_core as gc
 from geomag_core import (
     MORLET_DJ0,
+    WTC_CACHE_FORMAT,
     build_wtc_cache_key,
     find_valid_subsegments,
     load_wtc_cache,
 )
 
 from .data_store import NotFoundError, resolve_component_index
-from .deps import AuthDep, CacheDep, JobManagerDep, SettingsDep, StoreDep
+from .deps import CacheDep, JobManagerDep, SettingsDep, StoreDep
 from .jobs import TERMINAL_JOB_STATUSES, JobManager
 from .schemas import CacheEntryOut, JobStatusResponse, WTCJobRequest, WTCResultResponse
-from .security import AuthState, verify_ws_or_sse_auth
+from .security import AuthState, verify_ws_origin
 from .serializers import timestamps_to_iso, to_json_list
 
 router = APIRouter(tags=["jobs"])
@@ -120,6 +118,7 @@ def submit_wtc_job(
     )
     canonical_cache_params = {
         "stage": "cross_wtc",
+        "cache_format": WTC_CACHE_FORMAT,
         "episode_id": req.episode_id,
         "pair": [data_i.station_iaga, data_j.station_iaga],
         "component": req.component,
@@ -303,11 +302,11 @@ def get_wtc_job_result(
 
 @router.websocket("/ws/jobs/{job_id}")
 async def ws_job_progress(websocket: WebSocket, job_id: str) -> None:
-    """WebSocket progress stream (/ws/jobs/{job_id}) authenticated via HttpOnly cookie or header."""
+    """WebSocket progress stream (/ws/jobs/{job_id}) guarded by Host/Origin validation."""
     auth: AuthState = websocket.app.state.auth
     job_manager: JobManager = websocket.app.state.job_manager
 
-    ok, _, _ = verify_ws_or_sse_auth(websocket.headers, websocket.cookies, auth)
+    ok, _, _ = verify_ws_origin(websocket.headers, auth)
     if not ok:
         await websocket.close(code=1008)
         return
@@ -343,56 +342,6 @@ async def ws_job_progress(websocket: WebSocket, job_id: str) -> None:
         pass
     finally:
         job_manager.unsubscribe(job_id, sub)
-
-
-@router.get("/api/jobs/{job_id}/events")
-async def sse_job_progress(
-    job_id: str,
-    request: Request,
-    auth: AuthDep,
-    job_manager: JobManagerDep,
-) -> StreamingResponse:
-    """Server-Sent Events (SSE) progress fallback for browsers without WebSocket."""
-    ok, status_code, detail = verify_ws_or_sse_auth(request.headers, request.cookies, auth)
-    if not ok:
-        raise HTTPException(status_code=status_code, detail=detail)
-
-    loop = asyncio.get_running_loop()
-    snap, sub = job_manager.subscribe_with_snapshot(job_id, loop)
-    if snap is None:
-        raise NotFoundError(f"Unknown job_id {job_id!r}")
-
-    async def _event_stream():
-        try:
-            yield f"data: {json.dumps(snap)}\n\n"
-            if snap["status"] in TERMINAL_JOB_STATUSES or sub is None:
-                return
-            _, queue = sub
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
-                except TimeoutError:
-                    cur = job_manager.get_job(job_id)
-                    if cur is None:
-                        break
-                    if cur["status"] in TERMINAL_JOB_STATUSES:
-                        yield f"data: {json.dumps(cur)}\n\n"
-                        break
-                    yield ": keepalive\n\n"
-                    continue
-                yield f"data: {json.dumps(event)}\n\n"
-                if event["status"] in TERMINAL_JOB_STATUSES:
-                    break
-        finally:
-            job_manager.unsubscribe(job_id, sub)
-
-    return StreamingResponse(
-        _event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
 
 
 @router.get("/api/cache", response_model=list[CacheEntryOut])

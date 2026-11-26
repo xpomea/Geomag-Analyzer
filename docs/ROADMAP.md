@@ -27,7 +27,7 @@
           (Welch Фаза 1+2 И XWT/WTC + AR(1) Монте-Карло)
                              │
                              ▼
-         [Фаза 4: FastAPI + Manager IPC + runtime.sqlite + WS/SSE]
+         [Фаза 4: FastAPI + Manager IPC + runtime.sqlite + WebSocket]
                              │
                              ▼
          [Фаза 5: React/TS Синхр. графики + Vitest]
@@ -38,7 +38,7 @@
           (Эллипсы, MLT=12, Дуги, SVG/PNG/CSV)
                              │
                              ▼
-         [Фаза 7: Windows-упаковка (pywebview / --onedir / Inno Setup) и Web-режим]
+         [Фаза 7: Windows-упаковка (pywebview / --onedir / Portable ZIP)]
           (freeze_support, статический/runtime сплит + чистая Windows E2E-приёмка)
                              │
                              ▼
@@ -54,10 +54,10 @@
 | **1** | Конвейер ETL и бинарный кэш (`R3`) | Фаза 0 | 483/483 файла в `raw_manifest`, валидные `Parquet` для 4 штормов, `HDZ->XYZ`, `GUI`/`LON`/`SOD`/`has_baseline`, `SWiPS` в `нПа`, `OMNI`, `OULU` |
 | **2** | Вычислительное ядро `geomag_core` + **Шлюз §11** | Фаза 0 | **100% прохождение всех автотестов §11** (`0, A, B, C, D, E`, Таблица 11 SOS, MC-калибровка $n$), защита $D_0$ (`GCK`/`NCK`), деспайк и `NaN`-подсегменты Варианта B |
 | **3** | Кросс-спектральные движки (`Welch` + `XWT/WTC`) | Фаза 1, Фаза 2 | Двухфазный Уэлч (совместная маска, $m$-guard, $<2\text{ с}$ на 1176 пар); `XWT`/`WTC` (`NaN`/`gap-COI`) + 300–1000 суррогатов AR(1) |
-| **4** | Бэкенд `FastAPI`, `ProcessPoolExecutor` и кэш | Фаза 1, Фаза 3 | Все REST/WS/SSE эндпоинты, `Manager` IPC/отмена без зомби, `Origin`/CSRF, разделение `catalog.sqlite`/`runtime.sqlite` и `user_cache/` |
+| **4** | Бэкенд `FastAPI`, `ProcessPoolExecutor` и кэш | Фаза 1, Фаза 3 | Все REST/WS эндпоинты, `Manager` IPC/отмена без зомби, защита `Host`/`Origin`/`Sec-Fetch-Site`, разделение `catalog.sqlite`/`runtime.sqlite` и `user_cache/` |
 | **5** | Фронтенд `React/TS`: многопанельная рабочая область | Фаза 4 | Синхронизация `SOLAR-1` (L1/BSN) + `OMNI` + `OULU` + `Pc5/Pc6` + Стокс ($p < p_{\text{crit}}$) + `XWT`/`WTC` + **unit-тесты `Vitest`** |
 | **6** | Офлайн-карта 49 станций (`D3-geo`) и экспорт | Фаза 5 | 100% офлайн-работа (`world-110m.topojson`), эллипсы, `MLT=12`, выбор пар, экспорт `SVG`/`PNG`/`CSV` + **unit-тесты `Vitest`** |
-| **7** | Сборка Windows (`pywebview`/`--onedir`) и Веб-сервис | Фаза 6 | Портативный `.zip` и `Inno Setup` (`freeze_support`, упаковка `data/processed/` + `frontend/dist/`, `runtime.sqlite` и `user_cache/` в `%LOCALAPPDATA%`) прошли чистую офлайн-приёмку на Windows; `uvicorn --workers 1` |
+| **7** | Сборка Windows (`pywebview`/`--onedir` Portable ZIP) | Фаза 6 | Портативный `GeoMagAnalyzer_Portable_Win64.zip` (`freeze_support`, упаковка `data/processed/` + `frontend/dist/`, `./user_data/` и `%LOCALAPPDATA%` фолбэк) прошёл чистую офлайн-приёмку на Windows |
 | **8b** | Скрипты и материалы Главы 4 диссертации | Фаза 7 | Воспроизводимые таблицы и рисунки (`thesis_figures.py`) для Главы 4, согласованные с UI-экспортом `SVG`/`CSV` |
 
 ---
@@ -83,7 +83,7 @@
 
 - **Вход:** Завершена Фаза 0.
 - **Задачи:**
-  1. Реализовать генератор инвентаря и `SHA-256` манифеста (`geomag_etl/manifest.py`) по всем 483 файлам (`raw_manifest` в read-only `catalog.sqlite` и `manifest.parquet`), воссоздающий отсутствующий `manifest.csv`.
+  1. Реализовать генератор инвентаря и `SHA-256` манифеста (`geomag_etl/manifest.py`) по всем 483 файлам (таблица `raw_manifest` в read-only `catalog.sqlite`), воссоздающий отсутствующий `manifest.csv`.
   2. Реализовать строгий парсер `IAGA-2002` (`geomag_etl/intermagnet.py`):
      - распознавание `XYZF` vs `HDZF` **только** по полю `Reported` и именам столбцов (игнорируя неверный `Sensor Orientation` у **10** станций `XYZF`: `CLF`, `EBR`, `FUR`, `GUI`, `NGK`, `PAG`, `SPT`, `SUA`, `WIC`, `WNG` — `HDZ/HDZF`, и `LON` — `DIF`);
      - перевод 8 станций `HDZF` (`SBL`, `DUR`, `ESK`, `HAD`, `IZN`, `LER`, `SFS`, `VAL`) по формуле (2);
@@ -151,14 +151,14 @@
 - **Задачи:**
   1. Спроектировать и реализовать OpenAPI-схему (`geomag_api/schemas.py`), точку входа (`geomag_api/main.py`) и REST-роутеры (`routes_catalog.py`, `routes_timeseries.py`, `routes_polarization.py`, `routes_cross.py`, `routes_jobs.py`):
      - `/api/catalog` (эпизоды, 49 станций + `OULU`, `has_baseline`, матрица доступности по датам и качеству `v/q/p`);
-     - `/api/timeseries` (ряды `INTERMAGNET`, `SOLAR-1` с референсной дистанцией `L1-BSN` и сглаженным монотонным $V_x$, `OMNI`, `OULU`);
+     - `/api/timeseries/geomag` и `/api/timeseries/space-weather` (ряды `INTERMAGNET`, `SOLAR-1` с референсной дистанцией `L1-BSN` и сглаженным монотонным $V_x$, `OMNI`, `OULU`);
      - `/api/polarization` (синхронный Tier 2 расчёт Вариантов A/B + 2D/3D Стокс);
      - `/api/cross/welch` (парный, цепочный и матричный 49×49 кросс-спектр Фазы 2);
-     - `/api/jobs` (`POST` запуск, `GET` статус/результат, `DELETE` отмена), `WebSocket` `/ws/jobs/{job_id}` (+ `SSE` фолбэк) и `/api/shutdown`.
+     - `/api/jobs` (`POST` запуск, `GET` статус/результат, `DELETE` отмена), `WebSocket` `/ws/jobs/{job_id}` (+ клиентский polling-фолбэк) и `/api/shutdown`.
   2. Реализовать `JobManager` (`geomag_api/jobs.py`) на базе `ProcessPoolExecutor` (однопоточный BLAS: `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=1`) + `multiprocessing.Manager().Event()`/`Queue()` + **`runtime.sqlite`** (`jobs`, `cache_index` отдельно от read-only `catalog.sqlite`):
      - единое детерминированное хэширование параметров `sha256(core_version + canonical_params_json)` и мгновенная отдача кэша (`user_cache/`);
      - корректная отмена выполняющегося MC-расчёта между батчами, очистка временных файлов и безопасное завершение воркеров при остановке сервера;
-     - совместимая с `WS`/`SSE` защита от локального CSRF (`Origin`/`Host` + одноразовый bootstrap-токен $\to$ `SameSite=Strict` cookie + `X-Session-Token` для `POST`/`DELETE`).
+     - защита от локального CSRF и DNS-rebinding (`Host`, `Origin`, `Sec-Fetch-Site != cross-site`).
   3. Реализовать интеграционные тесты `TestClient`/`httpx` + `pytest-asyncio`: сценарии «cache miss $\to$ прогресс WS $\to$ готово $\to$ повторный cache hit», сценарий отмены в середине MC, сценарий неполной станции (напр. `SUA` на 4–5 окт.), проверка `Origin`/CSRF.
 - **Выход:** Все API-контракты задокументированы в `/docs` (Swagger), интеграционные тесты стабильно проходят без утечек процессов, `uvicorn geomag_api.main:app --workers 1` работает стабильно.
 
@@ -196,18 +196,15 @@
 
 ---
 
-### Фаза 7. Windows-упаковка (`pywebview` / `--onedir`), приёмка и веб-развёртывание
+### Фаза 7. Windows-упаковка (`pywebview` / `--onedir` Portable ZIP) и офлайн-приёмка
 
 - **Вход:** Завершена Фаза 6.
 - **Задачи:**
-  1. Написать `backend/launcher.py`: вызов **`multiprocessing.freeze_support()`** в начале, поиск свободного порта `127.0.0.1`, запуск `FastAPI` (`--workers 1`, однопоточные ограничения BLAS `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=1` в воркерах), окно `pywebview` (`Edge WebView2`), **20-строчный фолбэк на системный браузер** (при отсутствии `WebView2` или флаге `--browser`), безопасная остановка пула `ProcessPoolExecutor` при закрытии окна или по команде из UI/трея в режиме `--browser` (`console=False`).
+  1. Написать `backend/launcher.py`: вызов **`multiprocessing.freeze_support()`** в начале, поиск свободного порта `127.0.0.1`, запуск `FastAPI` (`--workers 1`, однопоточные ограничения BLAS `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=1` в воркерах), окно `pywebview` (`Edge WebView2`), **фолбэк на системный браузер** (при отсутствии `WebView2` или флаге `--browser`), безопасная остановка пула `ProcessPoolExecutor` при закрытии окна или по кнопке `Exit` в режиме `--browser` (`console=False`).
   2. Собрать production-бандл `frontend/dist/` и настроить `PyInstaller --onedir` (`packaging/geomag_analyzer.spec`) с включением read-only `data/processed/` и `frontend/dist/` (вкл. `world-110m.topojson`); настроить запись `runtime.sqlite` и пользовательского кэша `user_cache/` в `%LOCALAPPDATA%\GeoMagAnalyzer` (или `./user_data/` в портативном режиме).
-  3. Подготовить два варианта дистрибутива для Windows без прав администратора:
-     - портативный `GeoMagAnalyzer_Portable_Win64.zip`;
-     - пользовательский инсталлятор `Inno Setup` (`PrivilegesRequired=lowest`, ярлык на рабочий стол).
-  4. Подготовить профиль и документацию развёртывания в **режиме веб-сервиса** (`uvicorn geomag_api.main:app --workers 1` + `Nginx`/`Caddy` конфиг для WebSocket, квоты Tier 3).
-  5. **Сквозное приёмочное тестирование (E2E):** развернуть сборку на **чистой виртуальной/тестовой машине Windows 10/11 без установленного Python, без прав администратора и с отключённым интернетом**; проверить холодный старт, режим `--browser` и кнопку остановки, отображение карты, запуск/отмену `WTC`, повторный cache hit из `user_cache/` и экспорт `SVG`/`CSV`.
-- **Выход:** Оба дистрибутива проходят чистый офлайн-тест без ошибок и ложных блокировок на тестовой машине; веб-сервисный запуск подтверждён E2E-проверкой.
+  3. Подготовить портативный дистрибутив для Windows без прав администратора: `GeoMagAnalyzer_Portable_Win64.zip`.
+  4. **Сквозное приёмочное тестирование (E2E):** развернуть портативную сборку на **чистой виртуальной/тестовой машине Windows 10/11 без установленного Python, без прав администратора и с отключённым интернетом**; проверить холодный старт, режим `--browser` и кнопку остановки, отображение карты, запуск/отмену `WTC`, повторный cache hit из `user_cache/` и экспорт `SVG`/`CSV`.
+- **Выход:** Портативный дистрибутив проходит чистый офлайн-тест без ошибок и ложных блокировок на тестовой машине (`packaging/e2e_verify.py`).
 
 ---
 

@@ -12,19 +12,7 @@ class HealthResponse(BaseModel):
     core_version: str
     catalog_stations: int
     catalog_episodes: int
-    require_auth: bool
     can_shutdown: bool = False
-
-
-class BootstrapResponse(BaseModel):
-    authenticated: bool
-    session_token: str
-
-
-class SessionResponse(BaseModel):
-    authenticated: bool
-    session_token: str | None = None
-    require_auth: bool
 
 
 class ShutdownResponse(BaseModel):
@@ -138,11 +126,6 @@ class SpaceWeatherResponse(BaseModel):
     solar1: Solar1Series
     omni: OmniSeries | None = None
     oulu: OuluSeries | None = None
-
-
-class CombinedTimeseriesResponse(BaseModel):
-    geomag: GeomagTimeseriesResponse
-    space_weather: SpaceWeatherResponse
 
 
 class PolarizationRequest(BaseModel):
@@ -311,7 +294,6 @@ class WelchPairRequest(BaseModel):
     alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     min_common_segments: int = Field(default=2, ge=1)
     spectrum_type: Literal["flat", "red"] = "flat"
-    window_index: int | None = Field(default=None, ge=0)
     min_delta_lon_deg: float = Field(default=3.0, ge=0.0)
     unwrap_time: bool = True
 

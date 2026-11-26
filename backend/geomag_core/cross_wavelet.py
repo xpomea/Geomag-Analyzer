@@ -18,6 +18,7 @@ MORLET_OMEGA0 = 6.0
 MORLET_FOURIER_FACTOR = (4.0 * math.pi) / (MORLET_OMEGA0 + math.sqrt(2.0 + MORLET_OMEGA0 ** 2))
 MORLET_COI_FACTOR = 1.0 / math.sqrt(2.0)
 MORLET_DJ0 = 0.60
+WTC_CACHE_FORMAT = "compact_f32_v2"
 
 ProgressCallback = Callable[[int, int, str], None]
 CancelCheck = Callable[[], bool]
@@ -31,9 +32,9 @@ class XWTWTCResult:
     periods_sec: np.ndarray            # (n_scales,) seconds
     coi_periods_sec: np.ndarray        # (N,) seconds
     inside_coi: np.ndarray             # (n_scales, N) bool
-    W_i: np.ndarray                    # (n_scales, N) complex128
-    W_j: np.ndarray                    # (n_scales, N) complex128
-    W_ij: np.ndarray                   # (n_scales, N) complex128
+    W_i: np.ndarray | None             # (n_scales, N) complex128 (None when loaded from disk cache)
+    W_j: np.ndarray | None             # (n_scales, N) complex128 (None when loaded from disk cache)
+    W_ij: np.ndarray | None            # (n_scales, N) complex128 (None when loaded from disk cache)
     xwt_power: np.ndarray              # (n_scales, N) float64
     xwt_phase_rad: np.ndarray          # (n_scales, N) float64
     xwt_phase_deg: np.ndarray          # (n_scales, N) float64
@@ -462,6 +463,7 @@ def build_wtc_cache_key(
     """Build unified XWT/WTC cache key per ARCHITECTURE.md §4.2."""
     params = {
         "stage": "cross_wtc",
+        "cache_format": WTC_CACHE_FORMAT,
         "episode_id": episode_id,
         "pair": [pair[0], pair[1]],
         "component": component,
@@ -619,6 +621,7 @@ def compute_xwt_wtc(
 
     key_params = cache_params or {
         "stage": "cross_wtc",
+        "cache_format": WTC_CACHE_FORMAT,
         "n_total": n_total,
         "dt": dt,
         "period_min_sec": period_min_sec,
@@ -659,7 +662,7 @@ def compute_xwt_wtc(
 
 
 def save_wtc_cache(path: Path, result: XWTWTCResult) -> None:
-    """Persist XWTWTCResult arrays and metadata to compressed NPZ."""
+    """Persist compact display/export XWT/WTC arrays and metadata to compressed NPZ."""
     path.parent.mkdir(parents=True, exist_ok=True)
     sub_arr = np.asarray(result.subsegments, dtype=np.int64)
     sig95 = np.array([]) if result.wtc_sig95 is None else result.wtc_sig95
@@ -669,15 +672,10 @@ def save_wtc_cache(path: Path, result: XWTWTCResult) -> None:
         periods_sec=result.periods_sec,
         coi_periods_sec=result.coi_periods_sec,
         inside_coi=result.inside_coi,
-        W_i=result.W_i,
-        W_j=result.W_j,
-        W_ij=result.W_ij,
-        xwt_power=result.xwt_power,
-        xwt_phase_rad=result.xwt_phase_rad,
-        xwt_phase_deg=result.xwt_phase_deg,
-        wtc_r2=result.wtc_r2,
-        wtc_phase_rad=result.wtc_phase_rad,
-        wtc_phase_deg=result.wtc_phase_deg,
+        xwt_power=np.asarray(result.xwt_power, dtype=np.float32),
+        xwt_phase_deg=np.asarray(result.xwt_phase_deg, dtype=np.float32),
+        wtc_r2=np.asarray(result.wtc_r2, dtype=np.float32),
+        wtc_phase_deg=np.asarray(result.wtc_phase_deg, dtype=np.float32),
         alpha1_i=np.array(result.alpha1_i, dtype=np.float64),
         alpha1_j=np.array(result.alpha1_j, dtype=np.float64),
         wtc_sig95=sig95,
@@ -691,25 +689,27 @@ def save_wtc_cache(path: Path, result: XWTWTCResult) -> None:
 
 
 def load_wtc_cache(path: Path) -> XWTWTCResult:
-    """Load XWTWTCResult from compressed NPZ."""
+    """Load compact XWTWTCResult from compressed NPZ (W_i/W_j/W_ij omitted; phases recomputed)."""
     with np.load(path, allow_pickle=False) as data:
         sig95_raw = data["wtc_sig95"]
         wtc_sig95 = None if sig95_raw.size == 0 else sig95_raw
         sub_tuples = tuple((int(r[0]), int(r[1])) for r in data["subsegments"])
+        xwt_phase_deg = np.asarray(data["xwt_phase_deg"], dtype=np.float64)
+        wtc_phase_deg = np.asarray(data["wtc_phase_deg"], dtype=np.float64)
         return XWTWTCResult(
             scales=data["scales"],
             periods_sec=data["periods_sec"],
             coi_periods_sec=data["coi_periods_sec"],
             inside_coi=data["inside_coi"],
-            W_i=data["W_i"],
-            W_j=data["W_j"],
-            W_ij=data["W_ij"],
-            xwt_power=data["xwt_power"],
-            xwt_phase_rad=data["xwt_phase_rad"],
-            xwt_phase_deg=data["xwt_phase_deg"],
-            wtc_r2=data["wtc_r2"],
-            wtc_phase_rad=data["wtc_phase_rad"],
-            wtc_phase_deg=data["wtc_phase_deg"],
+            W_i=None,
+            W_j=None,
+            W_ij=None,
+            xwt_power=np.asarray(data["xwt_power"], dtype=np.float64),
+            xwt_phase_rad=np.deg2rad(xwt_phase_deg),
+            xwt_phase_deg=xwt_phase_deg,
+            wtc_r2=np.asarray(data["wtc_r2"], dtype=np.float64),
+            wtc_phase_rad=np.deg2rad(wtc_phase_deg),
+            wtc_phase_deg=wtc_phase_deg,
             alpha1_i=float(data["alpha1_i"].item()),
             alpha1_j=float(data["alpha1_j"].item()),
             wtc_sig95=wtc_sig95,

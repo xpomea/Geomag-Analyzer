@@ -34,19 +34,7 @@ export interface HealthResponse {
   core_version: string;
   catalog_stations: number;
   catalog_episodes: number;
-  require_auth: boolean;
   can_shutdown?: boolean;
-}
-
-export interface BootstrapResponse {
-  authenticated: boolean;
-  session_token: string;
-}
-
-export interface SessionResponse {
-  authenticated: boolean;
-  session_token: string | null;
-  require_auth: boolean;
 }
 
 export interface ShutdownResponse {
@@ -160,11 +148,6 @@ export interface SpaceWeatherResponse {
   solar1: Solar1Series;
   omni: OmniSeries | null;
   oulu: OuluSeries | null;
-}
-
-export interface CombinedTimeseriesResponse {
-  geomag: GeomagTimeseriesResponse;
-  space_weather: SpaceWeatherResponse;
 }
 
 export interface PolarizationRequest {

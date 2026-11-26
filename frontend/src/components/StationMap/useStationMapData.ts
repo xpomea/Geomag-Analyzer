@@ -61,7 +61,6 @@ export function useStationMapData(options: {
 }): UseStationMapDataResult {
   const {
     state,
-    auth,
     catalog,
     episodeBoundsMs,
     stationMetaMap,
@@ -130,13 +129,7 @@ export function useStationMapData(options: {
 
   // 1. Debounced 49-station network snapshot (NOT dependent on alpha!)
   useEffect(() => {
-    if (
-      !auth.checked ||
-      !auth.authenticated ||
-      !catalog ||
-      !snapshotWindow ||
-      catalog.stations.length === 0
-    ) {
+    if (!catalog || !snapshotWindow || catalog.stations.length === 0) {
       setSnapshotState((prev) =>
         !snapshotWindow || (prev && prev.paramSig !== snapParamSig) ? null : prev,
       );
@@ -195,8 +188,6 @@ export function useStationMapData(options: {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    auth.checked,
-    auth.authenticated,
     catalog,
     snapParamSig,
     snapshotWindow?.startIso,
@@ -230,7 +221,7 @@ export function useStationMapData(options: {
     ],
   );
 
-  const contextWelchOwnsFetch = state.activeCrossTab === "welch";
+  const contextWelchOwnsFetch = state.activeDeckTab === "welch";
 
   const pairBaselessBlocked = useMemo(() => {
     if (state.coordFrame !== "XmYm") return false;
@@ -277,7 +268,7 @@ export function useStationMapData(options: {
       setLoadingPair(false);
       return;
     }
-    if (!auth.checked || !auth.authenticated || !catalog || catalog.stations.length === 0) {
+    if (!catalog || catalog.stations.length === 0) {
       return;
     }
 
@@ -328,8 +319,6 @@ export function useStationMapData(options: {
     contextWelchOwnsFetch,
     pairBaselessBlocked,
     currentPairSig,
-    auth.checked,
-    auth.authenticated,
     catalog,
     state.episodeId,
     state.stationA,
@@ -450,7 +439,7 @@ export function useStationMapData(options: {
       setLoadingMatrix(false);
       return;
     }
-    if (!auth.checked || !auth.authenticated || !catalog || catalog.stations.length === 0) {
+    if (!catalog || catalog.stations.length === 0) {
       setMatrixState((prev) => (prev && prev.paramSig !== matrixParamSig ? null : prev));
       return;
     }
@@ -502,8 +491,6 @@ export function useStationMapData(options: {
   }, [
     options.showMatrixArcs,
     options.showArcs,
-    auth.checked,
-    auth.authenticated,
     catalog,
     matrixParamSig,
     state.episodeId,

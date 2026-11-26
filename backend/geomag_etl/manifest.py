@@ -173,9 +173,3 @@ def enrich_manifest(
             if key in stats and stats[key] is not None:
                 enriched.loc[mask, key] = stats[key]
     return enriched
-
-
-def write_manifest_parquet(manifest_df: pd.DataFrame, out_path: Path) -> None:
-    """Write manifest DataFrame to ZSTD Parquet."""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_df.to_parquet(out_path, index=False, compression="zstd")

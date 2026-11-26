@@ -5,7 +5,6 @@
  */
 
 import {
-  geoAzimuthalEqualArea,
   geoConicConformal,
   geoGraticule10,
   geoPath,
@@ -16,7 +15,6 @@ import { feature, mesh } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import worldTopoRaw from "../assets/world-110m.topojson?raw";
 
-export type MapProjectionType = "lcc" | "laea";
 export type MapRegionPreset = "all" | "europe" | "flr" | "canada";
 
 export interface RegionPresetConfig {
@@ -101,7 +99,6 @@ export function getWorldGeoData(): WorldGeoData {
 }
 
 export interface CreateProjectionParams {
-  projectionType: MapProjectionType;
   regionPreset: MapRegionPreset;
   width: number;
   height: number;
@@ -156,11 +153,10 @@ function buildRegionFitGeometry(
 }
 
 /**
- * Create a fitted Lambert Conformal Conic ('lcc') or Lambert Azimuthal Equal-Area ('laea')
- * D3 projection enclosing the chosen region and stations without high-latitude Mercator distortion.
+ * Create a fitted Lambert Conformal Conic ('lcc') D3 projection enclosing the chosen
+ * region and stations without high-latitude Mercator distortion.
  */
 export function createFittedMapProjection({
-  projectionType,
   regionPreset,
   width,
   height,
@@ -178,15 +174,10 @@ export function createFittedMapProjection({
   const padY = Math.min(paddingY, Math.floor(h * 0.14));
 
   const fitObj = buildRegionFitGeometry(cfg, stations);
-  const proj: GeoProjection =
-    projectionType === "laea"
-      ? geoAzimuthalEqualArea()
-          .rotate([cfg.rotateLon, -cfg.centerLat])
-          .clipAngle(110)
-      : geoConicConformal()
-          .rotate([cfg.rotateLon, 0])
-          .center([0, cfg.centerLat])
-          .parallels(cfg.parallels);
+  const proj: GeoProjection = geoConicConformal()
+    .rotate([cfg.rotateLon, 0])
+    .center([0, cfg.centerLat])
+    .parallels(cfg.parallels);
 
   proj.fitExtent(
     [
@@ -283,7 +274,6 @@ export function zoomMapViewportAtAnchor(
 export function scalePanOffsetForViewport(
   pan: { x: number; y: number },
   params: {
-    projectionType: MapProjectionType;
     regionPreset: MapRegionPreset;
     stations?: ReadonlyArray<{ lat_deg: number; lon_deg: number }>;
     fromWidth: number;
@@ -300,14 +290,12 @@ export function scalePanOffsetForViewport(
   if (fw === tw && fh === th) return pan;
 
   const fromBase = createFittedMapProjection({
-    projectionType: params.projectionType,
     regionPreset: params.regionPreset,
     width: fw,
     height: fh,
     stations: params.stations,
   });
   const toBase = createFittedMapProjection({
-    projectionType: params.projectionType,
     regionPreset: params.regionPreset,
     width: tw,
     height: th,

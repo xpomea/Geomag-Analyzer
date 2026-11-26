@@ -48,8 +48,6 @@ hiddenimports = (
     + [
         "anyio._backends._asyncio",
         "httptools",
-        "multipart",
-        "python_multipart",
         "webview.platforms.winforms",
         "webview.platforms.edgechromium",
         "clr",

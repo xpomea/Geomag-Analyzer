@@ -23,15 +23,8 @@ def test_catalog_endpoints_full_metadata(api_client):
     assert by_code["NCK"]["has_baseline"] is False
     assert by_code["RES"]["has_baseline"] is True
     assert by_code["OULU"]["station_type"] == "neutron_monitor"
-
-    mags = client.get("/api/catalog/stations?station_type=magnetometer")
-    assert mags.status_code == 200 and len(mags.json()) == 49
-
-    eps = client.get("/api/catalog/episodes")
-    assert eps.status_code == 200 and len(eps.json()) == 4
-
-    avail_lvv = client.get("/api/catalog/availability?station_iaga=LVV")
-    assert avail_lvv.status_code == 200 and len(avail_lvv.json()) == 9
+    assert sum(1 for s in payload["stations"] if s["station_type"] == "magnetometer") == 49
+    assert sum(1 for a in payload["availability"] if a["station_iaga"] == "LVV") == 9
 
 
 def test_geomag_timeseries_despiked_baseless_guard_and_absent_station(api_client):
@@ -166,20 +159,22 @@ def test_space_weather_ballistic_shift_monotonic_and_omni_coverage(api_client):
     man_delays = [d for d in r_man.json()["solar1"]["propagation_delay_min"] if d is not None]
     assert all(abs(d - 45.0) < 1e-6 for d in man_delays)
 
-    # Combined endpoint + missing OMNI warning on Oct 21-23
-    r_comb = client.get(
-        "/api/timeseries",
-        params={
-            "episode_id": "storm_20261021_23",
-            "station_iaga": "LVV",
-            "solar1_shift": "ballistic_auto",
-        },
+    # Geomag + missing OMNI warning on Oct 21-23
+    r_geo21 = client.get(
+        "/api/timeseries/geomag",
+        params={"episode_id": "storm_20261021_23", "station_iaga": "LVV"},
     )
-    assert r_comb.status_code == 200
-    comb = r_comb.json()
-    assert comb["geomag"]["available"] is True
-    assert comb["space_weather"]["omni"]["available"] is False
-    assert comb["space_weather"]["omni"]["warning"] is not None
+    assert r_geo21.status_code == 200
+    assert r_geo21.json()["available"] is True
+
+    r_sw21 = client.get(
+        "/api/timeseries/space-weather",
+        params={"episode_id": "storm_20261021_23", "solar1_shift": "ballistic_auto"},
+    )
+    assert r_sw21.status_code == 200
+    sw21 = r_sw21.json()
+    assert sw21["omni"]["available"] is False
+    assert sw21["omni"]["warning"] is not None
 
     # Direct synthetic monotonicity check on sharp speed step (-350 -> -900 km/s)
     ts = pd.date_range("2026-10-09T00:00:00Z", periods=100, freq="1min", tz="UTC")

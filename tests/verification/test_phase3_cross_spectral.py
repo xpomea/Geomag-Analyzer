@@ -357,10 +357,17 @@ def test_phase1_and_wtc_cache_keys_and_npz_roundtrip(tmp_path: Path):
     xw = gc.compute_xwt_wtc(x1, x2, n_surrogates=50, seed=10)
     wtc_path = tmp_path / "wtc_test.npz"
     gc.save_wtc_cache(wtc_path, xw)
+    with np.load(wtc_path, allow_pickle=False) as raw_npz:
+        for omitted in ("W_i", "W_j", "W_ij", "xwt_phase_rad", "wtc_phase_rad"):
+            assert omitted not in raw_npz.files
+        assert raw_npz["wtc_r2"].dtype == np.float32
+        assert raw_npz["xwt_power"].dtype == np.float32
     xw_loaded = gc.load_wtc_cache(wtc_path)
     assert xw_loaded.cache_key == xw.cache_key
     assert xw_loaded.subsegments == xw.subsegments
+    assert xw_loaded.W_i is None and xw_loaded.W_j is None and xw_loaded.W_ij is None
     assert np.allclose(xw_loaded.wtc_r2, xw.wtc_r2, equal_nan=True)
+    assert np.allclose(xw_loaded.xwt_power, xw.xwt_power, equal_nan=True)
     assert np.allclose(xw_loaded.wtc_sig95, xw.wtc_sig95)
 
 

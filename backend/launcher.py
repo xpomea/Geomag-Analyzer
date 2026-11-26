@@ -11,7 +11,6 @@ IMPORTANT:
 from __future__ import annotations
 
 import argparse
-import ctypes
 import importlib.util
 import json
 import logging
@@ -30,10 +29,8 @@ from pathlib import Path
 from typing import Any
 
 if sys.platform == "win32":
-    import ctypes.wintypes as wintypes
     import winreg
 else:
-    wintypes = None  # type: ignore[assignment]
     winreg = None  # type: ignore[assignment]
 
 _BACKEND_DIR = Path(__file__).resolve().parent
@@ -97,11 +94,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-browser-open",
         action="store_true",
         help="Do not invoke webbrowser.open() in browser mode (useful for automated tests).",
-    )
-    parser.add_argument(
-        "--no-tray",
-        action="store_true",
-        help="Disable the Windows system tray icon in browser mode.",
     )
     parser.add_argument(
         "--ready-file",
@@ -266,7 +258,6 @@ def resolve_runtime_settings(
             merged_hosts.append(cleaned)
 
     settings.allowed_hosts = tuple(merged_hosts)
-    settings.require_auth = True
     settings.shutdown_callback = shutdown_callback
     return settings
 
@@ -322,383 +313,20 @@ def write_ready_file(ready_file: Path | None, payload: dict[str, Any]) -> None:
             tmp_path.unlink(missing_ok=True)
 
 
-class _Win32TrayController:
-    """Lightweight ctypes Win32 system tray icon for console=False --browser mode."""
-
-    _WM_TRAYICON = 0x8000 + 20
-    _WM_COMMAND = 0x0111
-    _WM_DESTROY = 0x0002
-    _WM_CLOSE = 0x0010
-    _WM_LBUTTONDBLCLK = 0x0203
-    _WM_RBUTTONUP = 0x0205
-    _NIM_ADD = 0x00000000
-    _NIM_DELETE = 0x00000002
-    _NIF_MESSAGE = 0x00000001
-    _NIF_ICON = 0x00000002
-    _NIF_TIP = 0x00000004
-    _MF_STRING = 0x00000000
-    _MF_SEPARATOR = 0x00000800
-    _TPM_LEFTALIGN = 0x0000
-    _TPM_BOTTOMALIGN = 0x0020
-    _TPM_RETURNCMD = 0x0100
-    _IMAGE_ICON = 1
-    _LR_LOADFROMFILE = 0x00000010
-    _LR_DEFAULTSIZE = 0x00000040
-    _IDI_APPLICATION = 32512
-    _ID_OPEN = 1001
-    _ID_EXIT = 1002
-
-    def __init__(
-        self,
-        *,
-        on_open: Callable[[], None],
-        on_exit: Callable[[], None],
-        icon_path: Path | None = None,
-        tooltip: str = "GeoMag Analyzer (Server Running)",
-    ) -> None:
-        self._on_open = on_open
-        self._on_exit = on_exit
-        self._icon_path = icon_path
-        self._tooltip = tooltip[:127]
-        self._ready = threading.Event()
-        self._hwnd: int | None = None
-        self._thread: threading.Thread | None = None
-        self._wndproc_ref: Any = None
-        self._icon_handle: int = 0
-        self._owns_icon = False
-
-    def start(self) -> bool:
-        if sys.platform != "win32" or wintypes is None:
-            return False
-        self._thread = threading.Thread(
-            target=self._run_message_loop,
-            name="geomag-win32-tray",
-            daemon=True,
-        )
-        self._thread.start()
-        self._ready.wait(timeout=3.0)
-        return self._hwnd is not None
-
-    def stop(self) -> None:
-        if sys.platform != "win32" or wintypes is None:
-            return
-        hwnd = self._hwnd
-        if hwnd is not None:
-            try:
-                user32 = ctypes.windll.user32
-                user32.PostMessageW.argtypes = [
-                    wintypes.HWND,
-                    wintypes.UINT,
-                    ctypes.c_size_t,
-                    ctypes.c_ssize_t,
-                ]
-                user32.PostMessageW.restype = wintypes.BOOL
-                user32.PostMessageW(hwnd, self._WM_CLOSE, 0, 0)
-            except Exception:
-                pass
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
-
-    def _run_message_loop(self) -> None:
-        assert wintypes is not None
-        LRESULT = ctypes.c_ssize_t
-        WPARAM = ctypes.c_size_t
-        LPARAM = ctypes.c_ssize_t
-        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, WPARAM, LPARAM)
-
-        class GUID(ctypes.Structure):
-            _fields_ = [
-                ("Data1", wintypes.DWORD),
-                ("Data2", wintypes.WORD),
-                ("Data3", wintypes.WORD),
-                ("Data4", ctypes.c_ubyte * 8),
-            ]
-
-        class WNDCLASSEXW(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", wintypes.UINT),
-                ("style", wintypes.UINT),
-                ("lpfnWndProc", WNDPROC),
-                ("cbClsExtra", ctypes.c_int),
-                ("cbWndExtra", ctypes.c_int),
-                ("hInstance", wintypes.HINSTANCE),
-                ("hIcon", wintypes.HICON),
-                ("hCursor", wintypes.HANDLE),
-                ("hbrBackground", wintypes.HBRUSH),
-                ("lpszMenuName", wintypes.LPCWSTR),
-                ("lpszClassName", wintypes.LPCWSTR),
-                ("hIconSm", wintypes.HICON),
-            ]
-
-        class NOTIFYICONDATAW(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", wintypes.DWORD),
-                ("hWnd", wintypes.HWND),
-                ("uID", wintypes.UINT),
-                ("uFlags", wintypes.UINT),
-                ("uCallbackMessage", wintypes.UINT),
-                ("hIcon", wintypes.HICON),
-                ("szTip", wintypes.WCHAR * 128),
-                ("dwState", wintypes.DWORD),
-                ("dwStateMask", wintypes.DWORD),
-                ("szInfo", wintypes.WCHAR * 256),
-                ("uVersion", wintypes.UINT),
-                ("szInfoTitle", wintypes.WCHAR * 64),
-                ("dwInfoFlags", wintypes.DWORD),
-                ("guidItem", GUID),
-                ("hBalloonIcon", wintypes.HICON),
-            ]
-
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-
-        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-        user32.RegisterClassExW.argtypes = [ctypes.POINTER(WNDCLASSEXW)]
-        user32.RegisterClassExW.restype = wintypes.ATOM
-        user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
-        user32.UnregisterClassW.restype = wintypes.BOOL
-        user32.CreateWindowExW.argtypes = [
-            wintypes.DWORD,
-            wintypes.LPCWSTR,
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.HWND,
-            wintypes.HMENU,
-            wintypes.HINSTANCE,
-            wintypes.LPVOID,
-        ]
-        user32.CreateWindowExW.restype = wintypes.HWND
-        user32.DestroyWindow.argtypes = [wintypes.HWND]
-        user32.DestroyWindow.restype = wintypes.BOOL
-        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, WPARAM, LPARAM]
-        user32.DefWindowProcW.restype = LRESULT
-        user32.LoadImageW.argtypes = [
-            wintypes.HINSTANCE,
-            wintypes.LPCWSTR,
-            wintypes.UINT,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.UINT,
-        ]
-        user32.LoadImageW.restype = wintypes.HANDLE
-        user32.LoadIconW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR]
-        user32.LoadIconW.restype = wintypes.HICON
-        user32.DestroyIcon.argtypes = [wintypes.HICON]
-        user32.DestroyIcon.restype = wintypes.BOOL
-        user32.CreatePopupMenu.argtypes = []
-        user32.CreatePopupMenu.restype = wintypes.HMENU
-        user32.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT, WPARAM, wintypes.LPCWSTR]
-        user32.AppendMenuW.restype = wintypes.BOOL
-        user32.DestroyMenu.argtypes = [wintypes.HMENU]
-        user32.DestroyMenu.restype = wintypes.BOOL
-        user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
-        user32.GetCursorPos.restype = wintypes.BOOL
-        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-        user32.SetForegroundWindow.restype = wintypes.BOOL
-        user32.TrackPopupMenu.argtypes = [
-            wintypes.HMENU,
-            wintypes.UINT,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.HWND,
-            wintypes.LPVOID,
-        ]
-        user32.TrackPopupMenu.restype = ctypes.c_int
-        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, WPARAM, LPARAM]
-        user32.PostMessageW.restype = wintypes.BOOL
-        user32.GetMessageW.argtypes = [
-            ctypes.POINTER(wintypes.MSG),
-            wintypes.HWND,
-            wintypes.UINT,
-            wintypes.UINT,
-        ]
-        user32.GetMessageW.restype = wintypes.BOOL
-        user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
-        user32.TranslateMessage.restype = wintypes.BOOL
-        user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
-        user32.DispatchMessageW.restype = LRESULT
-        user32.PostQuitMessage.argtypes = [ctypes.c_int]
-        user32.PostQuitMessage.restype = None
-        shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(NOTIFYICONDATAW)]
-        shell32.Shell_NotifyIconW.restype = wintypes.BOOL
-
-        hinstance = kernel32.GetModuleHandleW(None)
-        class_name = f"GeoMagTrayWnd_{os.getpid()}_{threading.get_ident()}"
-        nid = NOTIFYICONDATAW()
-
-        def _show_context_menu(hwnd: int) -> None:
-            menu = user32.CreatePopupMenu()
-            if not menu:
-                return
-            try:
-                user32.AppendMenuW(menu, self._MF_STRING, self._ID_OPEN, "Open GeoMag Analyzer")
-                user32.AppendMenuW(menu, self._MF_SEPARATOR, 0, None)
-                user32.AppendMenuW(menu, self._MF_STRING, self._ID_EXIT, "Stop Server / Exit")
-                pt = wintypes.POINT()
-                user32.GetCursorPos(ctypes.byref(pt))
-                user32.SetForegroundWindow(hwnd)
-                cmd = user32.TrackPopupMenu(
-                    menu,
-                    self._TPM_LEFTALIGN | self._TPM_BOTTOMALIGN | self._TPM_RETURNCMD,
-                    pt.x,
-                    pt.y,
-                    0,
-                    hwnd,
-                    None,
-                )
-                user32.PostMessageW(hwnd, 0, 0, 0)
-                if cmd == self._ID_OPEN:
-                    self._on_open()
-                elif cmd == self._ID_EXIT:
-                    self._on_exit()
-                    user32.DestroyWindow(hwnd)
-            finally:
-                user32.DestroyMenu(menu)
-
-        @WNDPROC
-        def _wnd_proc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-            if msg == self._WM_TRAYICON:
-                event_id = lparam & 0xFFFF
-                if event_id == self._WM_RBUTTONUP:
-                    _show_context_menu(hwnd)
-                    return 0
-                if event_id == self._WM_LBUTTONDBLCLK:
-                    self._on_open()
-                    return 0
-            elif msg == self._WM_COMMAND:
-                cmd_id = wparam & 0xFFFF
-                if cmd_id == self._ID_OPEN:
-                    self._on_open()
-                    return 0
-                if cmd_id == self._ID_EXIT:
-                    self._on_exit()
-                    user32.DestroyWindow(hwnd)
-                    return 0
-            elif msg == self._WM_CLOSE:
-                user32.DestroyWindow(hwnd)
-                return 0
-            elif msg == self._WM_DESTROY:
-                shell32.Shell_NotifyIconW(self._NIM_DELETE, ctypes.byref(nid))
-                user32.PostQuitMessage(0)
-                return 0
-            return int(user32.DefWindowProcW(hwnd, msg, wparam, lparam))
-
-        self._wndproc_ref = _wnd_proc
-        wndclass = WNDCLASSEXW()
-        wndclass.cbSize = ctypes.sizeof(WNDCLASSEXW)
-        wndclass.lpfnWndProc = _wnd_proc
-        wndclass.hInstance = hinstance
-        wndclass.lpszClassName = class_name
-
-        atom = 0
-        hwnd = None
-        try:
-            atom = user32.RegisterClassExW(ctypes.byref(wndclass))
-            if not atom:
-                return
-            hwnd = user32.CreateWindowExW(
-                0,
-                class_name,
-                "GeoMag Analyzer Tray",
-                0,
-                0,
-                0,
-                0,
-                0,
-                None,
-                None,
-                hinstance,
-                None,
-            )
-            if not hwnd:
-                return
-
-            if self._icon_path is not None and self._icon_path.is_file():
-                loaded = user32.LoadImageW(
-                    None,
-                    str(self._icon_path),
-                    self._IMAGE_ICON,
-                    16,
-                    16,
-                    self._LR_LOADFROMFILE | self._LR_DEFAULTSIZE,
-                )
-                if loaded:
-                    self._icon_handle = int(loaded)
-                    self._owns_icon = True
-            if not self._icon_handle:
-                self._icon_handle = int(
-                    user32.LoadIconW(None, ctypes.cast(self._IDI_APPLICATION, wintypes.LPCWSTR))
-                )
-
-            nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
-            nid.hWnd = hwnd
-            nid.uID = 1
-            nid.uFlags = self._NIF_MESSAGE | self._NIF_ICON | self._NIF_TIP
-            nid.uCallbackMessage = self._WM_TRAYICON
-            nid.hIcon = self._icon_handle
-            nid.szTip = self._tooltip
-            shell32.Shell_NotifyIconW(self._NIM_ADD, ctypes.byref(nid))
-
-            self._hwnd = int(hwnd)
-            self._ready.set()
-
-            msg_struct = wintypes.MSG()
-            while user32.GetMessageW(ctypes.byref(msg_struct), None, 0, 0) > 0:
-                user32.TranslateMessage(ctypes.byref(msg_struct))
-                user32.DispatchMessageW(ctypes.byref(msg_struct))
-        except Exception:
-            logging.getLogger("geomag_launcher").debug(
-                "System tray initialization failed", exc_info=True
-            )
-        finally:
-            self._hwnd = None
-            self._ready.set()
-            if self._owns_icon and self._icon_handle:
-                try:
-                    user32.DestroyIcon(self._icon_handle)
-                except Exception:
-                    pass
-                self._icon_handle = 0
-            if atom:
-                try:
-                    user32.UnregisterClassW(class_name, hinstance)
-                except Exception:
-                    pass
-
-
 def run_browser_fallback(
     *,
     app_url: str,
-    get_open_url: Callable[[], str],
     ready_payload: dict[str, Any],
     ready_file: Path | None,
     open_browser: bool,
-    enable_tray: bool,
-    icon_path: Path | None,
     shutdown_event: threading.Event,
     server_thread: threading.Thread,
     trigger_shutdown: Callable[[], None],
 ) -> int:
-    """Open the UI in the default system browser and block until UI/tray/signal shutdown."""
+    """Open the UI in the default system browser and block until UI Exit or signal shutdown."""
     write_ready_file(ready_file, {**ready_payload, "mode": "browser"})
     if open_browser:
         webbrowser.open(app_url)
-
-    tray: _Win32TrayController | None = None
-    if enable_tray and sys.platform == "win32":
-        tray = _Win32TrayController(
-            on_open=lambda: webbrowser.open(get_open_url()),
-            on_exit=trigger_shutdown,
-            icon_path=icon_path,
-        )
-        tray.start()
 
     try:
         while not shutdown_event.wait(0.25):
@@ -706,9 +334,6 @@ def run_browser_fallback(
                 break
     except KeyboardInterrupt:
         trigger_shutdown()
-    finally:
-        if tray is not None:
-            tray.stop()
     return 0
 
 
@@ -777,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         f"[{args.host}]" if ":" in args.host and not args.host.startswith("[") else args.host
     )
     base_url = f"http://{display_host}:{port}"
-    app_url = f"{base_url}/?token={settings.bootstrap_token}"
+    app_url = f"{base_url}/"
     health_url = f"{base_url}/api/health"
 
     app = create_app(settings)
@@ -817,18 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         "mode": mode,
         "pid": os.getpid(),
         "user_data_dir": str(settings.user_data_dir),
-        "bootstrap_token": settings.bootstrap_token,
-        "session_token": settings.session_token,
     }
-
-    def get_open_url() -> str:
-        try:
-            auth = getattr(app.state, "auth", None)
-            if auth is not None and getattr(auth, "bootstrap_consumed", False):
-                return f"{base_url}/"
-        except Exception:
-            pass
-        return app_url
 
     try:
         if not wait_for_server_ready(health_url, server_thread, timeout_sec=30.0):
@@ -879,12 +493,9 @@ def main(argv: list[str] | None = None) -> int:
                 window_ref["window"] = None
                 return run_browser_fallback(
                     app_url=app_url,
-                    get_open_url=get_open_url,
                     ready_payload=ready_payload,
                     ready_file=args.ready_file,
                     open_browser=not bool(args.no_browser_open),
-                    enable_tray=not bool(args.no_tray),
-                    icon_path=icon_path,
                     shutdown_event=shutdown_event,
                     server_thread=server_thread,
                     trigger_shutdown=trigger_shutdown,
@@ -892,12 +503,9 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_browser_fallback(
             app_url=app_url,
-            get_open_url=get_open_url,
             ready_payload=ready_payload,
             ready_file=args.ready_file,
             open_browser=not bool(args.no_browser_open),
-            enable_tray=not bool(args.no_tray),
-            icon_path=icon_path,
             shutdown_event=shutdown_event,
             server_thread=server_thread,
             trigger_shutdown=trigger_shutdown,

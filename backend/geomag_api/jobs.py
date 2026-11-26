@@ -1,4 +1,4 @@
-"""Async ProcessPoolExecutor JobManager with runtime.sqlite persistence and WS/SSE push."""
+"""Async ProcessPoolExecutor JobManager with runtime.sqlite persistence and WebSocket push."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class TooManyJobsError(RuntimeError):
 
 
 class JobManager:
-    """Coordinates Tier 3 background jobs across ProcessPoolExecutor, runtime.sqlite, and WS/SSE."""
+    """Coordinates Tier 3 jobs across ProcessPoolExecutor, runtime.sqlite, and WebSocket."""
 
     def __init__(self, settings: ApiSettings, cache: CacheManager) -> None:
         self.settings = settings
@@ -256,14 +256,13 @@ class JobManager:
         """Submit a Tier 3 XWT/WTC job or immediately return cached/in-flight handle."""
         total_steps = max(1, int(params["n_surrogates"]))
         with self._lock:
-            hit = self.cache.find("cross_wtc", cache_key)
-            if hit is not None:
-                path, source = hit
+            path = self.cache.find("cross_wtc", cache_key)
+            if path is not None:
                 self.cache.register_entry(
                     cache_key=cache_key,
                     category="cross_wtc",
                     file_path=path,
-                    source=source,
+                    source="user",
                     params=params["canonical_cache_params"],
                 )
                 return self._insert_job_row(
@@ -283,9 +282,8 @@ class JobManager:
                 )
 
             if reverse_cache_key is not None and reverse_cache_key != cache_key:
-                rev_hit = self.cache.find("cross_wtc", reverse_cache_key)
-                if rev_hit is not None:
-                    rev_path, _ = rev_hit
+                rev_path = self.cache.find("cross_wtc", reverse_cache_key)
+                if rev_path is not None:
                     rev_params = {**params, "phase_negated": True}
                     return self._insert_job_row(
                         job_id=uuid.uuid4().hex,

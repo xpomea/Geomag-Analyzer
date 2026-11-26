@@ -1,4 +1,4 @@
-"""Build Windows --onedir, Portable ZIP, and Inno Setup installer for GeoMag Analyzer."""
+"""Build Windows --onedir and Portable ZIP for GeoMag Analyzer."""
 
 from __future__ import annotations
 
@@ -13,14 +13,9 @@ from pathlib import Path
 
 PACKAGING_DIR = Path(__file__).resolve().parent
 REPO_ROOT = PACKAGING_DIR.parent
-if str(PACKAGING_DIR) not in sys.path:
-    sys.path.insert(0, str(PACKAGING_DIR))
-
-from generate_icon import generate_icon_file  # noqa: E402
 
 REQUIRED_PROCESSED_FILES = (
     "catalog.sqlite",
-    "manifest.parquet",
     "geomag/storm_20261004_05.parquet",
     "geomag/storm_20261009_11.parquet",
     "geomag/storm_20261021_23.parquet",
@@ -41,8 +36,7 @@ PORTABLE_README_TEXT = """GeoMag Analyzer - Portable Edition (Windows x64)
    double-click GeoMagAnalyzer_Browser.bat or run:
        GeoMagAnalyzer.exe --browser
 
-   In browser mode, stop the server cleanly via the "Exit" button in the UI
-   or from the Windows notification tray icon ("Stop Server / Exit").
+   In browser mode, stop the server cleanly via the "Exit" button in the UI.
 
 3. 100% Offline Operation:
    - Normalized storm data and offline D3-geo world map (world-110m.topojson)
@@ -51,30 +45,6 @@ PORTABLE_README_TEXT = """GeoMag Analyzer - Portable Edition (Windows x64)
      (`runtime.sqlite`, `user_cache/`, logs) is written to `./user_data/` when
      writable (automatically falling back to `%LOCALAPPDATA%\\GeoMagAnalyzer`).
 """
-
-
-def find_iscc_executable() -> Path | None:
-    """Locate Inno Setup compiler (ISCC.exe) on PATH or standard install directories."""
-    for cmd in ("ISCC.exe", "iscc"):
-        found = shutil.which(cmd)
-        if found:
-            return Path(found)
-
-    candidates = [
-        Path(r"C:\Program Files\Inno Setup 7\ISCC.exe"),
-        Path(r"C:\Program Files (x86)\Inno Setup 7\ISCC.exe"),
-        Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
-        Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
-    ]
-    local_app = os.environ.get("LOCALAPPDATA")
-    if local_app:
-        for base in Path(local_app, "Programs").glob("Inno Setup*"):
-            candidates.append(base / "ISCC.exe")
-
-    for cand in candidates:
-        if cand.is_file():
-            return cand
-    return None
 
 
 def verify_processed_dataset(processed_dir: Path | None = None) -> None:
@@ -161,19 +131,6 @@ def build_portable_zip(onedir: Path, zip_path: Path) -> Path:
     return zip_path
 
 
-def build_inno_installer() -> Path:
-    """Compile packaging/installer.iss with Inno Setup ISCC.exe."""
-    iscc = find_iscc_executable()
-    if iscc is None:
-        raise FileNotFoundError("Inno Setup compiler (ISCC.exe) was not found.")
-    iss_path = PACKAGING_DIR / "installer.iss"
-    subprocess.run([str(iscc), str(iss_path)], cwd=str(REPO_ROOT), check=True)
-    setup_exe = REPO_ROOT / "dist" / "GeoMagAnalyzer_Setup.exe"
-    if not setup_exe.is_file():
-        raise FileNotFoundError(f"Expected Inno Setup installer at {setup_exe}")
-    return setup_exe
-
-
 def sha256_file(path: Path) -> str:
     """Compute lowercase SHA-256 hex digest of a file."""
     h = hashlib.sha256()
@@ -206,7 +163,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Reuse existing dist/GeoMagAnalyzer/",
     )
     parser.add_argument("--skip-zip", action="store_true", help="Skip Portable ZIP creation")
-    parser.add_argument("--skip-inno", action="store_true", help="Skip Inno Setup compilation")
     return parser.parse_args(argv)
 
 
@@ -215,17 +171,17 @@ def main(argv: list[str] | None = None) -> int:
 
     icon_path = PACKAGING_DIR / "geomag_analyzer.ico"
     if not icon_path.is_file():
-        generate_icon_file(icon_path)
+        raise FileNotFoundError(f"Missing icon asset at {icon_path}")
 
     verify_processed_dataset()
 
     if not args.skip_frontend:
-        print("[1/4] Building frontend/dist/ ...", flush=True)
+        print("[1/3] Building frontend/dist/ ...", flush=True)
         build_frontend()
 
     onedir = REPO_ROOT / "dist" / "GeoMagAnalyzer"
     if not args.skip_pyinstaller:
-        print("[2/4] Building PyInstaller --onedir bundle ...", flush=True)
+        print("[2/3] Building PyInstaller --onedir bundle ...", flush=True)
         onedir = build_pyinstaller_onedir()
     elif not (onedir / "GeoMagAnalyzer.exe").is_file():
         raise FileNotFoundError(
@@ -235,17 +191,10 @@ def main(argv: list[str] | None = None) -> int:
     artifacts: list[Path] = []
     zip_path = REPO_ROOT / "dist" / "GeoMagAnalyzer_Portable_Win64.zip"
     if not args.skip_zip:
-        print("[3/4] Creating Portable ZIP ...", flush=True)
+        print("[3/3] Creating Portable ZIP ...", flush=True)
         artifacts.append(build_portable_zip(onedir, zip_path))
     elif zip_path.is_file():
         artifacts.append(zip_path)
-
-    setup_path = REPO_ROOT / "dist" / "GeoMagAnalyzer_Setup.exe"
-    if not args.skip_inno:
-        print("[4/4] Compiling Inno Setup installer ...", flush=True)
-        artifacts.append(build_inno_installer())
-    elif setup_path.is_file():
-        artifacts.append(setup_path)
 
     sums_path = write_checksums(REPO_ROOT / "dist", artifacts)
     print(f"Build complete. Checksums written to {sums_path}", flush=True)

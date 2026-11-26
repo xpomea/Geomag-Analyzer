@@ -335,7 +335,7 @@ export const SpaceWeatherPanel: React.FC = () => {
         episode_id: state.episodeId,
         solar1_time_frame: s1.time_frame,
         solar1_shift_mode: state.solar1ShiftMode,
-        ref_distance_km: state.refDistanceKm,
+        ref_distance_km: s1.ref_distance_km,
         manual_lag_min: state.solar1ShiftMode === "manual" ? state.manualLagMin : "",
         omni_available: Boolean(rawSpaceWeather.omni?.available),
         oulu_baseline_cpm: rawSpaceWeather.oulu?.baseline_cpm ?? "",
@@ -354,7 +354,7 @@ export const SpaceWeatherPanel: React.FC = () => {
       ],
       rows,
     );
-  }, [shiftedSolar1, rawSpaceWeather, state.episodeId, state.solar1ShiftMode, state.refDistanceKm, state.manualLagMin]);
+  }, [shiftedSolar1, rawSpaceWeather, state.episodeId, state.solar1ShiftMode, state.manualLagMin]);
 
   return (
     <section className="panel-card deck-panel">

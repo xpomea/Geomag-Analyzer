@@ -1,19 +1,15 @@
 """Frozen Windows E2E acceptance suite for GeoMag Analyzer (Phase 7).
 
-Tests both built distributables (`GeoMagAnalyzer_Portable_Win64.zip` and
-`GeoMagAnalyzer_Setup.exe`) in a stripped environment WITHOUT installed Python,
-PYTHONPATH, or network access:
+Tests the built distributable (`GeoMagAnalyzer_Portable_Win64.zip`) in a stripped
+environment WITHOUT installed Python, PYTHONPATH, or network access:
   1. Portable ZIP extraction into a path with spaces, `portable.mode` -> `./user_data/`,
      WTC run/cancel/cache hit, `runtime.sqlite`, read-only `catalog.sqlite`, clean shutdown.
   2. Real headless Microsoft Edge (CDP) offline UI verification (all non-127.0.0.1 requests
      actively aborted), D3-geo 49-station SVG map + terminator + MLT=12, SVG/CSV export,
      and UI Exit button server shutdown.
-  3. Frozen desktop `pywebview` (Edge WebView2) launch, SPA bootstrap consumption,
-     `webview2_data` confinement inside `user_data_dir`, and clean `/api/shutdown`.
-  4. Inno Setup non-admin silent install (`/CURRENTUSER`), absence of `portable.mode`,
-     runtime writes strictly under `%LOCALAPPDATA%\\GeoMagAnalyzer`, WTC cache hit, clean
-     shutdown, and silent uninstall (`unins000.exe`).
-  5. Optional Windows Defender scan (`MpCmdRun.exe`) and raw dataset integrity check.
+  3. Frozen desktop `pywebview` (Edge WebView2) launch, `webview2_data` confinement inside
+     `user_data_dir`, and clean `/api/shutdown`.
+  4. Optional Windows Defender scan (`MpCmdRun.exe`) and raw dataset integrity check.
 """
 
 from __future__ import annotations
@@ -38,7 +34,6 @@ import websockets.sync.client as ws_sync
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = REPO_ROOT / "dist"
 PORTABLE_ZIP = DIST_DIR / "GeoMagAnalyzer_Portable_Win64.zip"
-SETUP_EXE = DIST_DIR / "GeoMagAnalyzer_Setup.exe"
 RAW_DATASET_DIR = REPO_ROOT / "GeoMag_Storms_Dataset_Oct-2026"
 
 
@@ -254,18 +249,12 @@ def _verify_api_wtc_and_cache(
         spa = client.get("/")
         assert spa.status_code == 200 and "GeoMag Analyzer" in spa.text
 
-        boot = client.get(f"/api/auth/bootstrap?token={ready['bootstrap_token']}")
-        assert boot.status_code == 200
-        sess_tok = boot.json()["session_token"]
-        hdrs = {"X-Session-Token": sess_tok}
-
-        assert client.get("/api/catalog/stations").status_code == 200
-        assert len(client.get("/api/catalog/stations").json()) == 50
+        cat = client.get("/api/catalog")
+        assert cat.status_code == 200 and len(cat.json()["stations"]) == 50
 
         # Cancel mid-MC job
         sub_c = client.post(
             "/api/jobs/wtc",
-            headers=hdrs,
             json={
                 "episode_id": "storm_20261009_11",
                 "station_i": "LVV",
@@ -286,7 +275,7 @@ def _verify_api_wtc_and_cache(
             ):
                 break
             time.sleep(0.1)
-        assert client.delete(f"/api/jobs/{canc_jid}", headers=hdrs).status_code == 200
+        assert client.delete(f"/api/jobs/{canc_jid}").status_code == 200
         dl2 = time.monotonic() + 10.0
         final_st = None
         while time.monotonic() < dl2:
@@ -309,17 +298,15 @@ def _verify_api_wtc_and_cache(
             "start_utc": "2026-10-04T00:00:00Z",
             "end_utc": "2026-10-04T07:59:00Z",
         }
-        sub_ok = client.post("/api/jobs/wtc", headers=hdrs, json=wtc_req)
+        sub_ok = client.post("/api/jobs/wtc", json=wtc_req)
         assert sub_ok.status_code == 200
         ok_jid = sub_ok.json()["job_id"]
         assert sub_ok.json()["cache_hit"] is False
 
-        cookie_val = client.cookies.get("geomag_session")
-        assert cookie_val
         frames = []
         with ws_sync.connect(
             f"ws://127.0.0.1:{port}/ws/jobs/{ok_jid}",
-            additional_headers={"Origin": base_url, "Cookie": f"geomag_session={cookie_val}"},
+            additional_headers={"Origin": base_url},
         ) as ws:
             while True:
                 msg = json.loads(ws.recv(timeout=25.0))
@@ -328,7 +315,7 @@ def _verify_api_wtc_and_cache(
                     break
         assert frames[-1]["status"] == "completed"
 
-        hit = client.post("/api/jobs/wtc", headers=hdrs, json=wtc_req)
+        hit = client.post("/api/jobs/wtc", json=wtc_req)
         assert hit.status_code == 200 and hit.json()["cache_hit"] is True
         assert hit.json()["status"] == "cached"
 
@@ -336,7 +323,7 @@ def _verify_api_wtc_and_cache(
         assert list((expected_user_data / "user_cache" / "cross_wtc").glob("*.npz"))
         assert _sha256(catalog_path) == catalog_before
 
-        sd = client.post("/api/shutdown", headers=hdrs)
+        sd = client.post("/api/shutdown")
         assert sd.status_code == 200
 
 
@@ -356,7 +343,6 @@ def _verify_offline_edge_ui(extract_dir: Path, env: dict[str, str], edge_root: P
             str(extract_dir / "GeoMagAnalyzer.exe"),
             "--browser",
             "--no-browser-open",
-            "--no-tray",
             "--ready-file",
             str(ready_file),
         ],
@@ -539,22 +525,12 @@ def _verify_frozen_desktop_pywebview(
                 f"WebView2 did not initialize storage inside {ud / 'webview2_data'}"
             )
 
-            # Allow WebView2 window to load SPA and consume one-time bootstrap token
-            time.sleep(4.0)
-            r_reuse = client.get(f"/api/auth/bootstrap?token={ready['bootstrap_token']}")
-            assert r_reuse.status_code == 401, (
-                f"Expected WebView2 to consume bootstrap token, got HTTP {r_reuse.status_code}"
-            )
-
             log_path = ud / "logs" / "launcher.log"
             assert log_path.is_file()
             log_text = log_path.read_text(encoding="utf-8")
             assert "ERROR" not in log_text and "Traceback" not in log_text, log_text
 
-            sd = client.post(
-                "/api/shutdown",
-                headers={"X-Session-Token": str(ready["session_token"])},
-            )
+            sd = client.post("/api/shutdown")
             assert sd.status_code == 200
 
         rc = proc.wait(timeout=15.0)
@@ -608,8 +584,6 @@ def _verify_raw_dataset_readonly() -> tuple[int, int]:
 def main() -> int:
     if not PORTABLE_ZIP.is_file():
         raise FileNotFoundError(f"Missing {PORTABLE_ZIP}")
-    if not SETUP_EXE.is_file():
-        raise FileNotFoundError(f"Missing {SETUP_EXE}")
 
     with tempfile.TemporaryDirectory(prefix="geomag_p7_e2e_") as tmp_str:
         tmp = Path(tmp_str)
@@ -639,7 +613,6 @@ def main() -> int:
                 str(portable_dir / "GeoMagAnalyzer.exe"),
                 "--browser",
                 "--no-browser-open",
-                "--no-tray",
                 "--ready-file",
                 str(ready_file_1),
             ],
@@ -672,70 +645,7 @@ def main() -> int:
         _verify_frozen_desktop_pywebview(portable_dir, env_port, tmp / "DesktopTest")
         print("[PASS] Frozen pywebview Edge WebView2 launch + storage isolation + /api/shutdown")
 
-        # 4. Inno Setup non-admin silent install -> LOCALAPPDATA runtime split -> uninstall
-        inno_dir = tmp / "InnoInstall Dir"
-        inno_local_app_data = tmp / "InnoIsolatedLocalAppData"
-        env_inno = _stripped_env(inno_local_app_data, tmp / "InnoEnv")
-
-        inst_res = subprocess.run(
-            [
-                str(SETUP_EXE),
-                "/VERYSILENT",
-                "/SUPPRESSMSGBOXES",
-                "/NORESTART",
-                "/CURRENTUSER",
-                f"/DIR={inno_dir}",
-                '/TASKS=""',
-            ],
-            check=True,
-        )
-        assert inst_res.returncode == 0
-        try:
-            assert (inno_dir / "GeoMagAnalyzer.exe").is_file()
-            assert not (inno_dir / "portable.mode").exists()
-            inno_catalog = inno_dir / "_internal" / "data" / "processed" / "catalog.sqlite"
-            assert inno_catalog.is_file()
-
-            ready_file_inno = tmp / "ready_inno.json"
-            proc_inno = subprocess.Popen(
-                [
-                    str(inno_dir / "GeoMagAnalyzer.exe"),
-                    "--browser",
-                    "--no-browser-open",
-                    "--no-tray",
-                    "--ready-file",
-                    str(ready_file_inno),
-                ],
-                cwd=str(inno_dir),
-                env=env_inno,
-            )
-            try:
-                ready_inno = _wait_ready_file(proc_inno, ready_file_inno, timeout=35.0)
-                _verify_api_wtc_and_cache(
-                    str(ready_inno["base_url"]),
-                    ready_inno,
-                    inno_local_app_data / "GeoMagAnalyzer",
-                    inno_catalog,
-                )
-                assert proc_inno.wait(timeout=12.0) == 0
-                assert not (inno_dir / "user_data").exists()
-                _assert_no_orphan_processes(inno_dir)
-                print("[PASS] Inno Setup non-admin install + %LOCALAPPDATA% runtime split + WTC")
-            finally:
-                if proc_inno.poll() is None:
-                    proc_inno.kill()
-                    proc_inno.wait(timeout=5.0)
-        finally:
-            unins = inno_dir / "unins000.exe"
-            if unins.is_file():
-                subprocess.run(
-                    [str(unins), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-                    check=True,
-                )
-                assert not (inno_dir / "GeoMagAnalyzer.exe").exists()
-                print("[PASS] Inno Setup silent uninstall clean")
-
-    defender_msg = _scan_with_defender([DIST_DIR / "GeoMagAnalyzer", PORTABLE_ZIP, SETUP_EXE])
+    defender_msg = _scan_with_defender([DIST_DIR / "GeoMagAnalyzer", PORTABLE_ZIP])
     print(f"[PASS] Windows Defender: {defender_msg}")
 
     n_files, n_bytes = _verify_raw_dataset_readonly()

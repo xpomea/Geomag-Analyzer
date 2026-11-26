@@ -25,7 +25,6 @@ export interface StokesEllipseInput {
   localNorthDeg: number;
   scaleMinI: number;
   scaleMaxI: number;
-  sizeMode?: "log" | "sqrt";
   minRadiusPx?: number;
   maxRadiusPx?: number;
 }
@@ -151,13 +150,12 @@ export function computeLocalNorthBearingDeg(
 }
 
 /**
- * Map total horizontal pulsation power I [nT^2] monotonically into ellipse major semi-axis [px].
+ * Map total horizontal pulsation power I [nT^2] monotonically (log10) into ellipse major semi-axis [px].
  */
 export function computeEllipseRadius(
   powerI: number,
   scaleMinI: number,
   scaleMaxI: number,
-  sizeMode: "log" | "sqrt" = "log",
   minRadiusPx = 6,
   maxRadiusPx = 20,
 ): number {
@@ -167,8 +165,7 @@ export function computeEllipseRadius(
   if (hi - lo < 1e-12) {
     return 0.5 * (minRadiusPx + maxRadiusPx);
   }
-  const transform = (v: number) =>
-    sizeMode === "sqrt" ? Math.sqrt(Math.max(0, v)) : Math.log10(1 + Math.max(0, v));
+  const transform = (v: number) => Math.log10(1 + Math.max(0, v));
   const tVal = transform(powerI);
   const tLo = transform(lo);
   const tHi = transform(hi);
@@ -195,7 +192,6 @@ export function buildStokesEllipseGeometry(input: StokesEllipseInput): StokesEll
     localNorthDeg,
     scaleMinI,
     scaleMaxI,
-    sizeMode = "log",
     minRadiusPx = 6,
     maxRadiusPx = 20,
   } = input;
@@ -243,7 +239,6 @@ export function buildStokesEllipseGeometry(input: StokesEllipseInput): StokesEll
     stokes.I,
     scaleMinI,
     scaleMaxI,
-    sizeMode,
     minRadiusPx,
     maxRadiusPx,
   );

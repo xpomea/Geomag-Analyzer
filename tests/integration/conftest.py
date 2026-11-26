@@ -14,18 +14,15 @@ from geomag_etl.config import DEFAULT_PROCESSED_DIR
 
 @pytest.fixture
 def make_test_client(tmp_path: Path) -> Callable[..., tuple[TestClient, ApiSettings]]:
-    """Create a TestClient backed by isolated user_data and static_cache temp dirs."""
+    """Create a TestClient backed by an isolated temporary user_data directory."""
     created_clients: list[TestClient] = []
 
     def _factory(**overrides) -> tuple[TestClient, ApiSettings]:
-        static_cache = Path(overrides.pop("static_cache_dir", tmp_path / "static_cache"))
         user_data = Path(overrides.pop("user_data_dir", tmp_path / "user_data"))
-        static_cache.mkdir(parents=True, exist_ok=True)
         user_data.mkdir(parents=True, exist_ok=True)
 
         settings = ApiSettings(
             processed_dir=overrides.pop("processed_dir", DEFAULT_PROCESSED_DIR),
-            static_cache_dir=static_cache,
             user_data_dir=user_data,
             max_workers=overrides.pop("max_workers", 2),
             max_mc_surrogates=overrides.pop("max_mc_surrogates", 1000),
@@ -45,9 +42,6 @@ def make_test_client(tmp_path: Path) -> Callable[..., tuple[TestClient, ApiSetti
 
 @pytest.fixture
 def api_client(make_test_client) -> tuple[TestClient, dict[str, str], ApiSettings]:
-    """Authenticated TestClient with X-Session-Token headers and one-time bootstrap cookie."""
+    """Local TestClient with empty custom headers dict for backwards compatibility."""
     client, settings = make_test_client()
-    boot = client.get(f"/api/auth/bootstrap?token={settings.bootstrap_token}")
-    assert boot.status_code == 200
-    headers = {"X-Session-Token": boot.json()["session_token"]}
-    return client, headers, settings
+    return client, {}, settings

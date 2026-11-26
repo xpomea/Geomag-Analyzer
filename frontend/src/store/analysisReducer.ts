@@ -29,8 +29,6 @@ export const DEFAULT_MERIDIONAL_CHAIN = [
 
 export const MIN_ZOOM_SPAN_MS = 30 * 60_000;
 
-export type CrossPanelTab = "spectrogram" | "welch" | "wtc";
-
 export type DeckTab =
   | "space_weather"
   | "magnetogram"
@@ -69,8 +67,6 @@ export interface AnalysisState {
   alpha: number;
   solar1ShiftMode: Solar1ShiftMode;
   manualLagMin: number;
-  refDistanceKm: number;
-  smoothWindowMin: number;
   viewRangeMs: [number, number] | null;
   cursorUtcMs: number | null;
   showFilteredMagnetogram: boolean;
@@ -78,13 +74,10 @@ export interface AnalysisState {
   exportTheme: ExportTheme;
 
   crossComponent: CrossComponent;
-  activeCrossTab: CrossPanelTab;
   activeDeckTab: DeckTab;
-  wtcStride: number;
 
   jobs: JobStatusResponse[];
   activeWtcJobId: string | null;
-  jobTransport: Record<string, "ws" | "sse">;
   cacheEntries: CacheEntryOut[];
   jobDrawerOpen: boolean;
   serverStatus: "running" | "shutting_down" | "stopped";
@@ -117,8 +110,6 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
   alpha: 0.05,
   solar1ShiftMode: "ballistic_auto",
   manualLagMin: 45,
-  refDistanceKm: 1_400_000,
-  smoothWindowMin: 31,
   viewRangeMs: null,
   cursorUtcMs: null,
   showFilteredMagnetogram: false,
@@ -126,13 +117,10 @@ export const INITIAL_ANALYSIS_STATE: AnalysisState = {
   exportTheme: "light",
 
   crossComponent: "X",
-  activeCrossTab: "spectrogram",
   activeDeckTab: "stokes",
-  wtcStride: 2,
 
   jobs: [],
   activeWtcJobId: null,
-  jobTransport: {},
   cacheEntries: [],
   jobDrawerOpen: false,
   serverStatus: "running",
@@ -157,16 +145,12 @@ export type AnalysisAction =
   | { type: "SET_ALPHA"; alpha: number }
   | { type: "SET_SOLAR1_SHIFT"; mode: Solar1ShiftMode }
   | { type: "SET_MANUAL_LAG"; lagMin: number }
-  | { type: "SET_REF_DISTANCE"; km: number }
-  | { type: "SET_SMOOTH_WINDOW"; min: number }
   | { type: "SET_VIEW_RANGE"; rangeMs: [number, number] | null; boundsMs?: [number, number] | null }
   | { type: "SET_CURSOR_UTC"; utcMs: number | null }
   | { type: "SET_SHOW_FILTERED"; show: boolean }
   | { type: "SET_SHOW_NOISE_GHOST"; show: boolean }
   | { type: "SET_CROSS_COMPONENT"; component: CrossComponent }
-  | { type: "SET_ACTIVE_CROSS_TAB"; tab: CrossPanelTab }
   | { type: "SET_ACTIVE_DECK_TAB"; tab: DeckTab }
-  | { type: "SET_WTC_STRIDE"; stride: number }
   | {
       type: "OPEN_WTC_JOB";
       jobId: string;
@@ -182,7 +166,6 @@ export type AnalysisAction =
   | { type: "SET_JOBS"; jobs: JobStatusResponse[] }
   | { type: "UPSERT_JOB"; job: JobStatusResponse }
   | { type: "SET_ACTIVE_WTC_JOB"; jobId: string | null }
-  | { type: "SET_JOB_TRANSPORT"; jobId: string; transport: "ws" | "sse" }
   | { type: "SET_CACHE_ENTRIES"; entries: CacheEntryOut[] }
   | { type: "SET_JOB_DRAWER_OPEN"; open: boolean }
   | { type: "SET_SERVER_STATUS"; status: "running" | "shutting_down" | "stopped" }
@@ -368,12 +351,6 @@ export function analysisReducer(
     case "SET_MANUAL_LAG":
       return { ...state, manualLagMin: action.lagMin };
 
-    case "SET_REF_DISTANCE":
-      return { ...state, refDistanceKm: Math.max(100_000, action.km) };
-
-    case "SET_SMOOTH_WINDOW":
-      return { ...state, smoothWindowMin: Math.max(1, Math.round(action.min)) };
-
     case "SET_VIEW_RANGE":
       if (action.rangeMs === null) {
         return { ...state, viewRangeMs: null };
@@ -395,25 +372,8 @@ export function analysisReducer(
     case "SET_CROSS_COMPONENT":
       return { ...state, crossComponent: action.component };
 
-    case "SET_ACTIVE_CROSS_TAB":
-      return { ...state, activeCrossTab: action.tab, activeDeckTab: action.tab };
-
-    case "SET_ACTIVE_DECK_TAB": {
-      const nextCross: CrossPanelTab =
-        action.tab === "spectrogram" || action.tab === "welch" || action.tab === "wtc"
-          ? action.tab
-          : state.activeCrossTab === "welch"
-            ? "spectrogram"
-            : state.activeCrossTab;
-      return {
-        ...state,
-        activeDeckTab: action.tab,
-        activeCrossTab: nextCross,
-      };
-    }
-
-    case "SET_WTC_STRIDE":
-      return { ...state, wtcStride: Math.max(1, Math.round(action.stride)) };
+    case "SET_ACTIVE_DECK_TAB":
+      return { ...state, activeDeckTab: action.tab };
 
     case "OPEN_WTC_JOB": {
       const switchedEpisode = action.episodeId !== state.episodeId;
@@ -442,7 +402,6 @@ export function analysisReducer(
         viewRangeMs: nextRange,
         cursorUtcMs: nextCursor,
         activeWtcJobId: action.jobId,
-        activeCrossTab: "wtc",
         activeDeckTab: "wtc",
       };
     }
@@ -463,15 +422,6 @@ export function analysisReducer(
     case "SET_ACTIVE_WTC_JOB":
       return { ...state, activeWtcJobId: action.jobId };
 
-    case "SET_JOB_TRANSPORT":
-      return {
-        ...state,
-        jobTransport: {
-          ...state.jobTransport,
-          [action.jobId]: action.transport,
-        },
-      };
-
     case "SET_CACHE_ENTRIES":
       return { ...state, cacheEntries: action.entries };
 
@@ -487,32 +437,6 @@ export function analysisReducer(
     default:
       return state;
   }
-}
-
-/**
- * Pure selector of server-fetched analysis parameters.
- * Excludes strictly client-side parameters (alpha, solar1ShiftMode, viewRangeMs, cursorUtcMs)
- * so toggling them never causes a backend roundtrip.
- */
-export function selectBackendFetchSignature(state: AnalysisState): string {
-  return JSON.stringify({
-    episodeId: state.episodeId,
-    stationA: state.stationA,
-    band: state.band,
-    tMaxPc6Sec: state.tMaxPc6Sec,
-    method: state.method,
-    coordFrame: state.coordFrame,
-    externalD0Deg: state.externalD0Deg,
-    L: state.L,
-    M: state.M,
-    windowSamples: state.windowSamples,
-    stepSamples: state.stepSamples,
-    nw: state.nw,
-    spectrumType: state.spectrumType,
-    oversampleM: state.oversampleM,
-    oversampleMethod: state.oversampleMethod,
-    orderN: state.orderN,
-  });
 }
 
 export function getStationBaselineWarning(

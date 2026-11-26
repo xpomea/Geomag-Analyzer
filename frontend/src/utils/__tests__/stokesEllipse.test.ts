@@ -247,9 +247,9 @@ describe("Stokes ellipse geometry, CW/CCW sign, masking, and coherence arcs", ()
   });
 
   it("scales ellipse radii monotonically and clamps snapshot windows to episode bounds", () => {
-    const rLow = computeEllipseRadius(10, 10, 1000, "log", 6, 20);
-    const rMid = computeEllipseRadius(100, 10, 1000, "log", 6, 20);
-    const rHigh = computeEllipseRadius(1000, 10, 1000, "log", 6, 20);
+    const rLow = computeEllipseRadius(10, 10, 1000, 6, 20);
+    const rMid = computeEllipseRadius(100, 10, 1000, 6, 20);
+    const rHigh = computeEllipseRadius(1000, 10, 1000, 6, 20);
     expect(rLow).toBeCloseTo(6, 5);
     expect(rHigh).toBeCloseTo(20, 5);
     expect(rMid).toBeGreaterThan(rLow);

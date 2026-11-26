@@ -180,7 +180,6 @@ function makeCtx(
   return {
     state: mergedState,
     dispatch: vi.fn(),
-    auth: { checked: true, authenticated: true, requireAuth: true, error: null },
     health: null,
     catalog,
     activeEpisode: catalog.episodes[0],
@@ -216,7 +215,6 @@ function makeCtx(
     flrError: null,
     wtcError: null,
     baselineWarning: null,
-    authenticateWithToken: vi.fn(),
     refreshJobsAndCache: vi.fn(),
     launchWtcJob: vi.fn(),
     cancelWtcJob: vi.fn(),
@@ -396,7 +394,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
       maskedWelch: null,
       state: {
         ...INITIAL_ANALYSIS_STATE,
-        activeCrossTab: "spectrogram",
+        activeDeckTab: "spectrogram",
         stationA: "LVV",
         stationB: "BEL",
         coordFrame: "XYZ",
@@ -496,7 +494,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
 
     const oldState = {
       ...INITIAL_ANALYSIS_STATE,
-      activeCrossTab: "welch" as const,
+      activeDeckTab: "welch" as const,
       stationA: "LVV",
       stationB: "BEL",
       L: 128,
@@ -506,7 +504,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
     };
     const newState = {
       ...oldState,
-      activeCrossTab: "spectrogram" as const,
+      activeDeckTab: "spectrogram" as const,
       L: 256,
       windowSamples: 720,
       tMaxPc6Sec: 900,
@@ -608,7 +606,7 @@ describe("StationMapPanel offline D3-geo map & interactive selection", () => {
       setMapFlrChainActive,
       state: {
         ...INITIAL_ANALYSIS_STATE,
-        activeCrossTab: "spectrogram",
+        activeDeckTab: "spectrogram",
         cursorUtcMs: cursorMs,
       },
     });

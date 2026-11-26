@@ -17,13 +17,6 @@ def to_json_float(val: Any) -> float | None:
     return f_val if math.isfinite(f_val) else None
 
 
-def to_json_int(val: Any) -> int | None:
-    """Convert integer-like scalar to Python int or None if NA/None."""
-    if val is None or pd.isna(val):
-        return None
-    return int(val)
-
-
 def _sanitize_nested(obj: Any) -> Any:
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None

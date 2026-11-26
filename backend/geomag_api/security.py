@@ -1,31 +1,20 @@
-"""Host/Origin validation, one-time bootstrap cookies, and X-Session-Token CSRF guard."""
+"""Local Host/Origin and Sec-Fetch-Site guard for GeoMag Analyzer."""
 
 from __future__ import annotations
 
-import hmac
-import threading
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-SESSION_COOKIE_NAME = "geomag_session"
-
 
 @dataclass
 class AuthState:
-    """In-memory session credentials and host/origin allowlist state."""
+    """Host allowlist state for local desktop/browser origin validation."""
 
-    bootstrap_token: str
-    session_token: str
-    session_cookie_value: str
     allowed_hosts: tuple[str, ...]
-    allowed_origins: tuple[str, ...] = ()
-    require_auth: bool = True
-    bootstrap_consumed: bool = False
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 def _extract_hostname(host_header: str | None) -> str:
@@ -65,22 +54,8 @@ def _parse_host_port(host_header: str | None, default_port: int = 80) -> tuple[s
     return raw, default_port
 
 
-def _parse_cookie_header(cookie_header: str | None) -> dict[str, str]:
-    cookies: dict[str, str] = {}
-    if not cookie_header:
-        return cookies
-    for part in cookie_header.split(";"):
-        if "=" not in part:
-            continue
-        name, value = part.split("=", 1)
-        cleaned_name = name.strip()
-        if cleaned_name:
-            cookies[cleaned_name] = value.strip()
-    return cookies
-
-
 def is_host_allowed(host_header: str | None, auth: AuthState) -> bool:
-    """Validate HTTP/WS Host header against localhost/configured allowlist."""
+    """Validate HTTP/WS Host header against localhost allowlist."""
     if not host_header:
         return False
     hostname = _extract_hostname(host_header)
@@ -95,10 +70,7 @@ def is_origin_allowed(
     """Validate Origin header including host:port match against Host when provided."""
     if origin_header is None or origin_header == "":
         return True
-    cleaned = origin_header.strip()
-    if cleaned in auth.allowed_origins:
-        return True
-    parsed = urlparse(cleaned)
+    parsed = urlparse(origin_header.strip())
     scheme = parsed.scheme.lower()
     if scheme not in ("http", "https"):
         return False
@@ -117,62 +89,30 @@ def is_origin_allowed(
     return True
 
 
-def consume_bootstrap_token(token: str | None, auth: AuthState) -> bool:
-    """Atomically verify and consume the one-time bootstrap token."""
-    if not token:
-        return False
-    with auth._lock:
-        if auth.bootstrap_consumed:
-            return False
-        if not hmac.compare_digest(token, auth.bootstrap_token):
-            return False
-        auth.bootstrap_consumed = True
-        return True
-
-
-def verify_session_cookie(cookies: Mapping[str, str], auth: AuthState) -> bool:
-    """Check whether geomag_session HttpOnly cookie matches active session secret."""
-    cookie_val = cookies.get(SESSION_COOKIE_NAME)
-    if not cookie_val:
-        return False
-    return hmac.compare_digest(cookie_val, auth.session_cookie_value)
-
-
-def verify_session_header(headers: Mapping[str, str], auth: AuthState) -> bool:
-    """Check whether X-Session-Token header matches active session token."""
+def is_sec_fetch_site_allowed(headers: Mapping[str, str]) -> bool:
+    """Block browser cross-site requests indicated by Sec-Fetch-Site."""
     lowered = {k.lower(): v for k, v in headers.items()}
-    tok = lowered.get("x-session-token")
-    if not tok:
-        return False
-    return hmac.compare_digest(tok, auth.session_token)
+    return lowered.get("sec-fetch-site", "").strip().lower() != "cross-site"
 
 
-def verify_ws_or_sse_auth(
+def verify_ws_origin(
     headers: Mapping[str, str],
-    cookies: Mapping[str, str],
     auth: AuthState,
 ) -> tuple[bool, int, str]:
-    """Authenticate WS or SSE connections compatible with browser EventSource/WebSocket APIs."""
+    """Validate WebSocket Host, Origin, and Sec-Fetch-Site headers."""
     lowered = {k.lower(): v for k, v in headers.items()}
     host_hdr = lowered.get("host")
-    if not is_host_allowed(host_hdr, auth) or not is_origin_allowed(
-        lowered.get("origin"), auth, host_header=host_hdr
+    if (
+        not is_host_allowed(host_hdr, auth)
+        or not is_origin_allowed(lowered.get("origin"), auth, host_header=host_hdr)
+        or not is_sec_fetch_site_allowed(lowered)
     ):
         return False, 403, "Forbidden origin or host"
-
-    if not auth.require_auth:
-        return True, 200, "ok"
-
-    if verify_session_cookie(cookies, auth) or verify_session_header(lowered, auth):
-        return True, 200, "ok"
-
-    return False, 401, "Missing or invalid session credentials"
+    return True, 200, "ok"
 
 
 class HostOriginCSRFMiddleware:
-    """Pure ASGI middleware enforcing Host/Origin checks and session/CSRF auth on /api/*."""
-
-    _EXEMPT_GET_PATHS = frozenset({"/api/health", "/api/auth/bootstrap", "/api/auth/session"})
+    """Pure ASGI middleware enforcing localhost Host, Origin, and Sec-Fetch-Site checks."""
 
     def __init__(self, app: ASGIApp, auth: AuthState) -> None:
         self.app = app
@@ -189,39 +129,16 @@ class HostOriginCSRFMiddleware:
             for k, v in scope.get("headers", [])
         }
         host_hdr = headers.get("host")
-        host_ok = is_host_allowed(host_hdr, self.auth)
-        origin_ok = is_origin_allowed(headers.get("origin"), self.auth, host_header=host_hdr)
-        if not host_ok or not origin_ok:
+        if (
+            not is_host_allowed(host_hdr, self.auth)
+            or not is_origin_allowed(headers.get("origin"), self.auth, host_header=host_hdr)
+            or not is_sec_fetch_site_allowed(headers)
+        ):
             if scope_type == "http":
                 resp = JSONResponse({"detail": "Forbidden origin or host"}, status_code=403)
                 await resp(scope, receive, send)
             else:
                 await send({"type": "websocket.close", "code": 1008})
             return
-
-        if scope_type == "http":
-            method = scope.get("method", "GET").upper()
-            path = scope.get("path", "")
-            if self.auth.require_auth and path.startswith("/api/"):
-                if method in ("POST", "DELETE", "PUT", "PATCH"):
-                    if not verify_session_header(headers, self.auth):
-                        resp = JSONResponse(
-                            {"detail": "Missing or invalid X-Session-Token"},
-                            status_code=401,
-                        )
-                        await resp(scope, receive, send)
-                        return
-                elif method in ("GET", "HEAD") and path not in self._EXEMPT_GET_PATHS:
-                    cookies = _parse_cookie_header(headers.get("cookie"))
-                    if not (
-                        verify_session_cookie(cookies, self.auth)
-                        or verify_session_header(headers, self.auth)
-                    ):
-                        resp = JSONResponse(
-                            {"detail": "Missing or invalid session credentials"},
-                            status_code=401,
-                        )
-                        await resp(scope, receive, send)
-                        return
 
         await self.app(scope, receive, send)

@@ -1,4 +1,4 @@
-"""SOLAR-1 L1 IMF (MAG), plasma (SWiPS), and optional NetCDF-3 ETL."""
+"""SOLAR-1 L1 IMF (MAG) and plasma (SWiPS) ETL."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.io import netcdf_file
 
 from .config import (
     EPISODES,
@@ -190,35 +189,6 @@ def bin_swips_to_minute_grid(
     result["sweep_offset_sec"] = out_offset
     result["is_swips_valid"] = out_valid
     return result
-
-
-def read_solar1_netcdf(path: Path) -> dict[str, object]:
-    """Read SOLAR-1 NetCDF-3 Classic metadata and diagnostics via scipy.io.netcdf_file."""
-    with netcdf_file(str(path), mode="r", mmap=False) as nc:
-        var_shapes = {name: tuple(var.shape) for name, var in nc.variables.items()}
-        attrs = {
-            k: (v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v)
-            for k, v in getattr(nc, "_attributes", {}).items()
-        }
-        mag_flags_constant_invalid = False
-        if "flags" in nc.variables:
-            fl = np.asarray(nc.variables["flags"].data)
-            if fl.size > 0 and np.all(fl == -2147483647):
-                mag_flags_constant_invalid = True
-
-        all_fill_vars: list[str] = []
-        for name, var in nc.variables.items():
-            arr = np.asarray(var.data)
-            if arr.dtype.kind == "f" and arr.size > 0 and np.all(arr == -9999.0):
-                all_fill_vars.append(name)
-
-    return {
-        "filename": path.name,
-        "variables": var_shapes,
-        "global_attributes": attrs,
-        "mag_flags_constant_invalid": mag_flags_constant_invalid,
-        "all_fill_vars": sorted(all_fill_vars),
-    }
 
 
 def process_solar1(
