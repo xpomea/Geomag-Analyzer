@@ -1,0 +1,29 @@
+[Unit]
+Description=GeoMag Analyzer Web Service (FastAPI + ProcessPoolExecutor)
+After=network.target
+
+[Service]
+Type=simple
+User=geomag
+Group=geomag
+WorkingDirectory=/opt/geomag-analyzer
+EnvironmentFile=/etc/geomag-analyzer/geomag-analyzer.env
+
+# IMPORTANT: --workers 1 is mandatory because JobManager keeps active
+# ProcessPoolExecutor futures and cancellation events in process memory.
+ExecStart=/opt/geomag-analyzer/.venv/bin/uvicorn geomag_api.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Enforce read-only base dataset and restrict writes to runtime user_data/
+ProtectSystem=strict
+ReadOnlyPaths=/opt/geomag-analyzer/data/processed /opt/geomag-analyzer/frontend/dist
+ReadWritePaths=/var/lib/geomag-analyzer/user_data
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
