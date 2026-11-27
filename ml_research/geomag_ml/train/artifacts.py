@@ -26,8 +26,10 @@ from geomag_ml.models.baselines import (
     OrdinaryKrigingBaseline,
     RidgeSchurBaseline,
 )
+from geomag_ml.models.cross_attn_vm import CrossAttentionVirtualMagnetometer
 from geomag_ml.models.mlp_ae import MaskedConditionalMLPAE
 from geomag_ml.models.mlp_vm import MaskedWideMLP
+from geomag_ml.models.perceiver_ae import PerceiverBottleneckAE
 from geomag_ml.utils.io import read_json, save_npz_atomic, write_json
 
 MODEL_REGISTRY: dict[str, type[nn.Module]] = {
@@ -35,6 +37,10 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "mlp_ae": MaskedConditionalMLPAE,
     "MaskedWideMLP": MaskedWideMLP,
     "mlp_vm": MaskedWideMLP,
+    "PerceiverBottleneckAE": PerceiverBottleneckAE,
+    "perceiver_ae": PerceiverBottleneckAE,
+    "CrossAttentionVirtualMagnetometer": CrossAttentionVirtualMagnetometer,
+    "cross_attn_vm": CrossAttentionVirtualMagnetometer,
 }
 
 BASELINE_MODEL_REGISTRY: dict[str, type[BaseGeomagModel]] = {

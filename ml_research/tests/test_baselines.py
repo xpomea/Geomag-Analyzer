@@ -251,7 +251,12 @@ def test_portable_dataset_path_in_config_serialization(
 
     ds_abs = (ml_root / "data_cache" / "geomag_ml_oct2026_clean_v1.npz").resolve()
     rel = portable_path_str(ds_abs, repo_root=repo_root)
-    assert rel == "ml_research/data_cache/geomag_ml_oct2026_clean_v1.npz"
+    expected_rel = (
+        "ml_research/data_cache/geomag_ml_oct2026_clean_v1.npz"
+        if (repo_root / "ml_research").is_dir()
+        else "data_cache/geomag_ml_oct2026_clean_v1.npz"
+    )
+    assert rel == expected_rel
     assert ":" not in rel
 
     ext_file = (tmp_path / "external_bundle.npz").resolve()

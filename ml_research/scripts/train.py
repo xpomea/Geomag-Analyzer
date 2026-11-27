@@ -109,6 +109,44 @@ def _build_model_kwargs(
             "n_blocks": int(model_cfg.get("n_blocks", 3)),
             "dropout": float(model_cfg.get("dropout", 0.15)),
         }
+    if mtype in ("perceiver_ae", "perceiverbottleneckae"):
+        return {
+            "d_in": int(model_cfg.get("d_in", 9)),
+            "d_out": int(model_cfg.get("d_out", 3)),
+            "latent_dim": int(model_cfg.get("latent_dim", 5)),
+            "time_cond_dim": _resolve_time_cond_dim(model_cfg, meta),
+            "bottleneck_mode": str(model_cfg.get("bottleneck_mode", "ae_decorr")),
+            "d_model": int(model_cfg.get("d_model", 128)),
+            "n_enc_layers": int(model_cfg.get("n_enc_layers", 3)),
+            "n_heads": int(model_cfg.get("n_heads", 4)),
+            "d_ff": int(model_cfg.get("d_ff", 256)),
+            "n_lat_queries": int(model_cfg.get("n_lat_queries", 4)),
+            "dropout": float(model_cfg.get("dropout", 0.1)),
+            "use_spatial_bias": bool(model_cfg.get("use_spatial_bias", True)),
+            "spatial_bias_hidden": int(model_cfg.get("spatial_bias_hidden", 16)),
+            "use_station_emb": bool(model_cfg.get("use_station_emb", False)),
+            "max_stations": int(model_cfg.get("max_stations", n_stations)),
+            "station_emb_dim": int(model_cfg.get("station_emb_dim", 8)),
+            "station_emb_dropout": float(model_cfg.get("station_emb_dropout", 0.3)),
+        }
+    if mtype in ("cross_attn_vm", "crossattentionvirtualmagnetometer"):
+        return {
+            "d_in": int(model_cfg.get("d_in", 9)),
+            "d_out": int(model_cfg.get("d_out", 3)),
+            "time_cond_dim": _resolve_time_cond_dim(model_cfg, meta),
+            "d_model": int(model_cfg.get("d_model", 128)),
+            "n_enc_layers": int(model_cfg.get("n_enc_layers", 3)),
+            "n_cross_layers": int(model_cfg.get("n_cross_layers", 2)),
+            "n_heads": int(model_cfg.get("n_heads", 4)),
+            "d_ff": int(model_cfg.get("d_ff", 256)),
+            "dropout": float(model_cfg.get("dropout", 0.1)),
+            "use_spatial_bias": bool(model_cfg.get("use_spatial_bias", True)),
+            "spatial_bias_hidden": int(model_cfg.get("spatial_bias_hidden", 16)),
+            "use_station_emb": bool(model_cfg.get("use_station_emb", False)),
+            "max_stations": int(model_cfg.get("max_stations", n_stations)),
+            "station_emb_dim": int(model_cfg.get("station_emb_dim", 8)),
+            "station_emb_dropout": float(model_cfg.get("station_emb_dropout", 0.3)),
+        }
     raise ValueError(f"Unsupported model_type {model_type!r} in train.py.")
 
 
@@ -237,10 +275,21 @@ def main() -> None:
         model_kwargs = _build_model_kwargs(model_type, model_cfg, n_st, meta)
 
         train_dict = dict(var_cfg.get("train", {}))
+        var_eval_cfg = deepcopy(eval_cfg)
         if args.smoke:
-            train_dict["max_epochs"] = min(3, int(train_dict.get("max_epochs", 3)))
+            train_dict["max_epochs"] = min(2, int(train_dict.get("max_epochs", 2)))
             train_dict["early_stopping_patience"] = min(
-                3, int(train_dict.get("early_stopping_patience", 3))
+                2, int(train_dict.get("early_stopping_patience", 2))
+            )
+            train_dict["val_m2_repeats"] = 1
+            train_dict["max_train_batches"] = min(
+                25, int(train_dict.get("max_train_batches") or 25)
+            )
+            var_eval_cfg["modes"] = ["M2", "M4"]
+            var_eval_cfg["m2_repeats"] = min(2, int(var_eval_cfg.get("m2_repeats", 2)))
+            var_eval_cfg["stability_drop_fracs"] = [0.20, 0.40]
+            var_eval_cfg["stability_repeats"] = min(
+                2, int(var_eval_cfg.get("stability_repeats", 2))
             )
         train_cfg = TrainConfig.from_dict(train_dict, seed=seed)
 
@@ -343,12 +392,12 @@ def main() -> None:
                 scaler_obj,
                 mask_gen,
                 eval_split="test",
-                eval_modes=eval_cfg.get("modes", ("M1", "M2", "M3_500km", "M3_1000km", "M4")),
-                m2_drop_frac=float(eval_cfg.get("m2_drop_frac", 0.25)),
-                m2_repeats=int(eval_cfg.get("m2_repeats", 5)),
-                min_obs=int(eval_cfg.get("min_obs", 10)),
-                stability_drop_fracs=eval_cfg.get("stability_drop_fracs", (0.20, 0.30, 0.40)),
-                stability_repeats=int(eval_cfg.get("stability_repeats", 5)),
+                eval_modes=var_eval_cfg.get("modes", ("M1", "M2", "M3_500km", "M3_1000km", "M4")),
+                m2_drop_frac=float(var_eval_cfg.get("m2_drop_frac", 0.25)),
+                m2_repeats=int(var_eval_cfg.get("m2_repeats", 5)),
+                min_obs=int(var_eval_cfg.get("min_obs", 10)),
+                stability_drop_fracs=var_eval_cfg.get("stability_drop_fracs", (0.20, 0.30, 0.40)),
+                stability_repeats=int(var_eval_cfg.get("stability_repeats", 5)),
                 use_qc_clean_obs=True,
                 return_outputs=True,
             )
@@ -374,7 +423,7 @@ def main() -> None:
                 "baseless_policy": baseless_policy,
                 "variation_step_policy": variation_step_policy,
                 "train_config": train_cfg.to_dict(),
-                "eval_config": eval_cfg,
+                "eval_config": var_eval_cfg,
                 "smoke": bool(args.smoke),
                 "git_commit": git_commit,
                 "dataset_path": portable_path_str(dataset_path, repo_root=REPO_ROOT),
@@ -409,10 +458,20 @@ def main() -> None:
             m1_aur = _extract_metric(metrics, "M1", "auroral", "vector_3d", "rmse_nT")
             m2_gl = _extract_metric(metrics, "M2", "global", "vector_3d", "rmse_nT")
             m2_r2 = _extract_metric(metrics, "M2", "global", "vector_3d", "r2")
+            zs_bucket = metrics.get("eval_masks", {}).get("zero_shot", {})
+            zs_held = None
+            if isinstance(zs_bucket, dict) and "heldout_zero_shot" in zs_bucket:
+                zs_held = (
+                    zs_bucket["heldout_zero_shot"]
+                    .get("global", {})
+                    .get("vector_3d", {})
+                    .get("rmse_nT")
+                )
+            zs_msg = f" | ZS={_fmt(float(zs_held) if zs_held is not None else None)}nT" if zs_held is not None else ""
             print(
                 f"[{branch}] {tag:32s} f{f_id} | best_ep={fit_res['best_epoch']:03d} | "
                 f"M1 EU={_fmt(m1_eu)}nT AUR={_fmt(m1_aur)}nT | "
-                f"M2 GL={_fmt(m2_gl)}nT (R2={_fmt(m2_r2, '.3f')}) | {elapsed:.1f}s -> {run_id}"
+                f"M2 GL={_fmt(m2_gl)}nT (R2={_fmt(m2_r2, '.3f')}){zs_msg} | {elapsed:.1f}s -> {run_id}"
             )
 
     total_sec = time.perf_counter() - t_all_start

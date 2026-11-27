@@ -16,8 +16,16 @@ from geomag_ml.data.datasets import SingleStepDataset
 from geomag_ml.data.masks import MaskGenerator
 from geomag_ml.data.preprocessing import FieldScaler
 from geomag_ml.eval.metrics import StreamingMetricsAccumulator
+from geomag_ml.models.cross_attn_vm import CrossAttentionVirtualMagnetometer
 from geomag_ml.models.mlp_ae import MaskedConditionalMLPAE, build_mlp_flat_input
 from geomag_ml.models.mlp_vm import MaskedWideMLP
+from geomag_ml.models.perceiver_ae import PerceiverBottleneckAE
+from geomag_ml.models.spatial_encoder import (
+    build_attn_forbidden,
+    build_obs_tokens,
+    build_station_coord_features,
+    compute_pair_geometry,
+)
 from geomag_ml.train.losses import (
     assert_finite_tensor,
     beta_schedule,
@@ -63,12 +71,25 @@ class TrainConfig:
     m2_drop_range: tuple[float, float] = (0.20, 0.35)
     m3_radius_range_km: tuple[float, float] = (500.0, 1000.0)
     min_obs: int = 10
+    station_dropout_count: tuple[int, int] = (0, 0)
+    max_train_batches: int | None = None
     val_m2_drop_frac: float = 0.25
     val_m2_repeats: int = 3
     eval_batch_size: int = 1024
     seed: int = 42
 
     def __post_init__(self) -> None:
+        drop_lo, drop_hi = int(self.station_dropout_count[0]), int(self.station_dropout_count[1])
+        if drop_lo < 0 or drop_hi < drop_lo:
+            raise ValueError(
+                f"station_dropout_count must satisfy 0 <= lo <= hi, got {self.station_dropout_count}."
+            )
+        self.station_dropout_count = (drop_lo, drop_hi)
+        if self.max_train_batches is not None:
+            mtb = int(self.max_train_batches)
+            if mtb < 1:
+                raise ValueError(f"max_train_batches must be >= 1 when set, got {mtb}.")
+            self.max_train_batches = mtb
         self.train_mask_mode = str(self.train_mask_mode).strip().lower()
         if self.train_mask_mode not in VALID_TRAIN_MASK_MODES:
             raise ValueError(
@@ -113,6 +134,10 @@ class TrainConfig:
                 continue
             if k in ("m2_drop_range", "m3_radius_range_km"):
                 kwargs[k] = (float(v[0]), float(v[1]))
+            elif k == "station_dropout_count":
+                kwargs[k] = (int(v[0]), int(v[1]))
+            elif k == "max_train_batches":
+                kwargs[k] = None if v is None else int(v)
             elif k == "mask_probs":
                 kwargs[k] = None if v is None else {str(mk): float(mv) for mk, mv in dict(v).items()}
             else:
@@ -126,6 +151,7 @@ class TrainConfig:
         data = asdict(self)
         data["m2_drop_range"] = list(self.m2_drop_range)
         data["m3_radius_range_km"] = list(self.m3_radius_range_km)
+        data["station_dropout_count"] = list(self.station_dropout_count)
         return data
 
 
@@ -161,6 +187,15 @@ class Trainer:
     ) -> None:
         if int(train_cfg.max_epochs) < 1:
             raise ValueError(f"max_epochs must be >= 1, got {train_cfg.max_epochs}.")
+        if isinstance(model, CrossAttentionVirtualMagnetometer):
+            if float(train_cfg.w_obs) != 0.0:
+                raise ValueError(
+                    "CrossAttentionVirtualMagnetometer requires w_obs == 0.0 to prevent multi-hop target leakage (R8)."
+                )
+            if train_cfg.train_mask_mode == "none":
+                raise ValueError(
+                    "CrossAttentionVirtualMagnetometer requires active target masking (train_mask_mode != 'none')."
+                )
         self.model = model.to(device)
         self.cfg = train_cfg
         self.device = device
@@ -183,11 +218,15 @@ class Trainer:
         train_min_obs: int,
         cons_rng: np.random.Generator,
         effective_lambda_cons: float,
+        mlt_b: torch.Tensor | None = None,
+        coords_t: torch.Tensor | None = None,
+        pair_geom_t: torch.Tensor | None = None,
+        station_ids_t: torch.Tensor | None = None,
     ) -> torch.Tensor:
         cfg = self.cfg
-        x_flat = build_mlp_flat_input(x_b, obs_t)
 
         if isinstance(self.model, MaskedConditionalMLPAE):
+            x_flat = build_mlp_flat_input(x_b, obs_t)
             c_time = self.model.select_time_cond(tf_b, device=self.device)
             with torch.amp.autocast("cuda", dtype=torch.float16, enabled=self.amp_enabled):
                 y_hat_flat, _, mu, logvar = self.model.forward_with_stats(x_flat, c_time)
@@ -226,6 +265,7 @@ class Trainer:
                     m2_drop_range=cfg.m2_drop_range,
                     m3_radius_range_km=cfg.m3_radius_range_km,
                     min_obs=train_min_obs,
+                    station_dropout_count=cfg.station_dropout_count,
                     rng=cons_rng,
                 )
                 obs2_t = torch.from_numpy(obs2_np).to(self.device)
@@ -237,6 +277,7 @@ class Trainer:
             return assert_finite_tensor(loss, "branch_a_train_loss")
 
         if isinstance(self.model, MaskedWideMLP):
+            x_flat = build_mlp_flat_input(x_b, obs_t)
             with torch.amp.autocast("cuda", dtype=torch.float16, enabled=self.amp_enabled):
                 y_hat_flat = self.model(x_flat)
             y_hat_3d = y_hat_flat.float().reshape(x_b.shape[0], x_b.shape[1], 3)
@@ -253,7 +294,99 @@ class Trainer:
             )
             return assert_finite_tensor(loss, "branch_b_train_loss")
 
-        raise TypeError(f"Unsupported model class for Phase 2 Trainer: {type(self.model).__name__}")
+        if isinstance(self.model, PerceiverBottleneckAE):
+            if mlt_b is None or coords_t is None:
+                raise ValueError("PerceiverBottleneckAE training requires mlt_hours and station_coords.")
+            obs_tokens = build_obs_tokens(x_b, coords_t, mlt_b, obs_t)
+            c_time = self.model.select_time_cond(tf_b, device=self.device)
+            q_coords = build_station_coord_features(coords_t, mlt_b, c_time=c_time)
+            with torch.amp.autocast("cuda", dtype=torch.float16, enabled=self.amp_enabled):
+                y_hat, _, mu, logvar = self.model.forward_with_stats(
+                    obs_tokens, obs_t, pair_geom_t, q_coords, station_ids=station_ids_t
+                )
+
+            loss = masked_weighted_huber_loss(
+                y_hat.float(),
+                x_b,
+                m_qc_b,
+                obs_t,
+                tgt_t,
+                in_train_t,
+                w_tgt=cfg.w_tgt,
+                w_obs=cfg.w_obs,
+                delta=cfg.huber_delta,
+            )
+
+            if logvar is not None and float(cfg.beta_max) > 0.0:
+                beta_cur = beta_schedule(epoch, cfg.beta_max, cfg.beta_warmup_epochs)
+                if beta_cur > 0.0:
+                    loss = loss + float(beta_cur) * beta_vae_kl_loss(mu, logvar)
+
+            if float(cfg.lambda_cov) > 0.0:
+                loss = loss + float(cfg.lambda_cov) * covariance_decorr_loss(
+                    mu, min_batch_size=cfg.cov_min_batch_size
+                )
+
+            if effective_lambda_cons > 0.0:
+                obs2_np, _ = mask_generator.sample_train_batch_masks(
+                    m_qc_b_np,
+                    m_qc_b_np,
+                    in_train_np,
+                    probs=effective_mask_probs,
+                    m2_drop_range=cfg.m2_drop_range,
+                    m3_radius_range_km=cfg.m3_radius_range_km,
+                    min_obs=train_min_obs,
+                    station_dropout_count=cfg.station_dropout_count,
+                    rng=cons_rng,
+                )
+                obs2_t = torch.from_numpy(obs2_np).to(self.device)
+                obs_tokens2 = build_obs_tokens(x_b, coords_t, mlt_b, obs2_t)
+                with torch.amp.autocast("cuda", dtype=torch.float16, enabled=self.amp_enabled):
+                    mu_2 = self.model.encode_deterministic(
+                        obs_tokens2, obs2_t, pair_geom=pair_geom_t, station_ids=station_ids_t
+                    )
+                loss = loss + float(effective_lambda_cons) * latent_consistency_loss(mu, mu_2)
+
+            return assert_finite_tensor(loss, "branch_a_perceiver_train_loss")
+
+        if isinstance(self.model, CrossAttentionVirtualMagnetometer):
+            if mlt_b is None or coords_t is None or station_ids_t is None:
+                raise ValueError(
+                    "CrossAttentionVirtualMagnetometer training requires mlt_hours and station_coords."
+                )
+            if int((obs_t & tgt_t).sum().item()) != 0:
+                raise AssertionError("obs_mask and target_mask must be disjoint for CrossAttentionVM.")
+
+            obs_tokens = build_obs_tokens(x_b, coords_t, mlt_b, obs_t)
+            c_time = self.model.select_time_cond(tf_b, device=self.device)
+            q_coords = build_station_coord_features(coords_t, mlt_b, c_time=c_time)
+            attn_forbidden = build_attn_forbidden(obs_t, station_ids_t, station_ids_t)
+            with torch.amp.autocast("cuda", dtype=torch.float16, enabled=self.amp_enabled):
+                y_hat = self.model(
+                    obs_tokens,
+                    obs_t,
+                    pair_geom_t,
+                    q_coords,
+                    pair_geom_t,
+                    attn_forbidden,
+                    k_station_ids=station_ids_t,
+                    q_station_ids=station_ids_t,
+                )
+
+            loss = masked_weighted_huber_loss(
+                y_hat.float(),
+                x_b,
+                m_qc_b,
+                obs_t,
+                tgt_t,
+                in_train_t,
+                w_tgt=cfg.w_tgt,
+                w_obs=0.0,
+                delta=cfg.huber_delta,
+            )
+            return assert_finite_tensor(loss, "branch_b_cross_attn_train_loss")
+
+        raise TypeError(f"Unsupported model class for Trainer: {type(self.model).__name__}")
 
     def _evaluate_validation(
         self,
@@ -262,6 +395,7 @@ class Trainer:
         y_true_val_nT: np.ndarray,
         scaler: FieldScaler | None,
         station_belt_id: np.ndarray,
+        mask_generator: MaskGenerator,
     ) -> tuple[float, float, float, float]:
         cfg = self.cfg
         self.model.eval()
@@ -271,10 +405,10 @@ class Trainer:
         val_x_t = val_dataset.x_work
         val_qc_t = val_dataset.m_qc_clean
         val_tf_np = val_dataset.time_features.numpy()
+        val_mlt_np = val_dataset.mlt_hours.numpy() if val_dataset.mlt_hours is not None else None
         in_train_t = val_dataset.in_train_mask
 
         n_val = int(val_x_np.shape[0])
-        n_st = int(val_x_np.shape[1])
         bs = max(1, int(cfg.eval_batch_size))
 
         loss_sum = 0.0
@@ -289,6 +423,9 @@ class Trainer:
                     sc.obs_mask,
                     sc.target_mask,
                     time_features=val_tf_np,
+                    mlt_hours=val_mlt_np,
+                    station_coords=mask_generator.station_coords,
+                    station_dist_km=mask_generator.station_dist_km,
                     eval_batch_size=bs,
                 )
                 y_hat_nT = (
@@ -419,6 +556,25 @@ class Trainer:
             effective_lambda_cons = float(cfg.lambda_cons)
 
         in_train_t = train_dataset.in_train_mask.to(self.device)
+        if hasattr(self.model, "set_in_train_stations"):
+            self.model.set_in_train_stations(train_dataset.in_train_mask)
+
+        coords_t: torch.Tensor | None = None
+        pair_geom_t: torch.Tensor | None = None
+        station_ids_t: torch.Tensor | None = None
+        if isinstance(self.model, (PerceiverBottleneckAE, CrossAttentionVirtualMagnetometer)):
+            if train_dataset.mlt_hours is None or val_dataset.mlt_hours is None:
+                raise ValueError(
+                    f"{type(self.model).__name__} requires `mlt_hours` in train and val datasets."
+                )
+            coords_t = torch.from_numpy(
+                np.ascontiguousarray(mask_generator.station_coords.astype(np.float32))
+            ).to(self.device)
+            pair_geom_t = compute_pair_geometry(coords_t, coords_t).unsqueeze(0)
+            station_ids_t = torch.arange(
+                train_dataset.n_stations, dtype=torch.int64, device=self.device
+            )
+
         best_val_metric_nT = float("inf")
         best_epoch = 0
         best_state_dict: dict[str, torch.Tensor] | None = None
@@ -435,13 +591,20 @@ class Trainer:
             tr_loss_sum = 0.0
             tr_samples = 0
 
-            for batch in train_loader:
+            for batch_idx, batch in enumerate(train_loader):
+                if cfg.max_train_batches is not None and batch_idx >= cfg.max_train_batches:
+                    break
                 x_b = batch["x_work"].to(self.device, non_blocking=(self.device.type == "cuda"))
                 m_qc_b = batch["m_qc_clean"].to(
                     self.device, non_blocking=(self.device.type == "cuda")
                 )
                 tf_b = batch["time_features"].to(
                     self.device, non_blocking=(self.device.type == "cuda")
+                )
+                mlt_b = (
+                    batch["mlt_hours"].to(self.device, non_blocking=(self.device.type == "cuda"))
+                    if "mlt_hours" in batch
+                    else None
                 )
                 m_qc_b_np = batch["m_qc_clean"].numpy().astype(bool)
 
@@ -453,6 +616,7 @@ class Trainer:
                     m2_drop_range=cfg.m2_drop_range,
                     m3_radius_range_km=cfg.m3_radius_range_km,
                     min_obs=train_min_obs,
+                    station_dropout_count=cfg.station_dropout_count,
                     rng=mask_rng,
                 )
                 obs_t = torch.from_numpy(obs_np).to(self.device)
@@ -474,6 +638,10 @@ class Trainer:
                     train_min_obs=train_min_obs,
                     cons_rng=cons_rng,
                     effective_lambda_cons=effective_lambda_cons,
+                    mlt_b=mlt_b,
+                    coords_t=coords_t,
+                    pair_geom_t=pair_geom_t,
+                    station_ids_t=station_ids_t,
                 )
 
                 grad_scaler.scale(loss).backward()
@@ -494,6 +662,7 @@ class Trainer:
                 y_true_val_nT,
                 scaler,
                 station_belt_id,
+                mask_generator,
             )
             ep_sec = time.perf_counter() - t_ep
 

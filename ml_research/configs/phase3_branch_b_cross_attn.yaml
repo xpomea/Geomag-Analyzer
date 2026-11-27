@@ -1,0 +1,95 @@
+# Phase 3 Branch B: Spatial Set Transformer + Cross-Attention Virtual Magnetometer (+ Zero-Shot)
+phase: phase3
+phase_prefix: p3
+branch: B
+model_type: cross_attn_vm
+dataset_path: ml_research/data_cache/geomag_ml_oct2026_clean_v1.npz
+out_dir: ml_research/artifacts
+seed: 42
+
+split_protocol: looe_4fold
+baseline_mode: temp_train_quiet_proxy
+baseless_policy: train_quiet_proxy
+variation_step_policy: flag_qc_exclude
+default_zero_shot_stations: ["LVV", "BEL", "MEA"]
+
+eval:
+  modes: ["M1", "M2", "M3_500km", "M3_1000km", "M4"]
+  m2_drop_frac: 0.25
+  m2_repeats: 5
+  min_obs: 10
+  stability_drop_fracs: [0.20, 0.30, 0.40]
+  stability_repeats: 5
+
+base:
+  tag: cross_attn_vm_asinh
+  scaler_mode: asinh_global
+  zero_shot: false
+  model:
+    d_in: 9
+    d_out: 3
+    use_ut_cond: true
+    use_doy: auto
+    d_model: 128
+    n_enc_layers: 3
+    n_cross_layers: 2
+    n_heads: 4
+    d_ff: 256
+    dropout: 0.1
+    use_spatial_bias: true
+    use_station_emb: false
+  train:
+    lr: 5.0e-4
+    weight_decay: 1.0e-4
+    batch_size: 64
+    max_epochs: 100
+    warmup_epochs: 5
+    min_lr_ratio: 0.01
+    early_stopping_patience: 15
+    grad_clip: 1.0
+    use_amp: true
+    huber_delta: 1.0
+    w_tgt: 1.0
+    w_obs: 0.0
+    train_mask_mode: m1_m2_m3
+    mask_probs:
+      M1: 0.30
+      M2: 0.35
+      M3: 0.35
+    m2_drop_range: [0.20, 0.35]
+    m3_radius_range_km: [500.0, 1000.0]
+    min_obs: 10
+    station_dropout_count: [2, 3]
+    val_m2_drop_frac: 0.25
+    val_m2_repeats: 3
+    eval_batch_size: 512
+
+ablations:
+  zero_shot:
+    tag: cross_attn_vm_zero_shot_asinh
+    zero_shot: true
+
+  no_spatial_bias:
+    tag: cross_attn_vm_nobias_asinh
+    model:
+      use_spatial_bias: false
+
+  with_station_emb:
+    tag: cross_attn_vm_stemb_asinh
+    model:
+      use_station_emb: true
+
+  with_station_emb_zs:
+    tag: cross_attn_vm_stemb_zs_asinh
+    zero_shot: true
+    model:
+      use_station_emb: true
+
+  no_ut:
+    tag: cross_attn_vm_nout_asinh
+    model:
+      use_ut_cond: false
+
+  zscore:
+    tag: cross_attn_vm_zscore
+    scaler_mode: zscore_per_station
