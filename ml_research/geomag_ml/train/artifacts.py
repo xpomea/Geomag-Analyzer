@@ -19,6 +19,13 @@ from geomag_ml.data.preprocessing import (
     save_scaler_json,
 )
 from geomag_ml.data.schema import BELT_ID_TO_NAME
+from geomag_ml.models.base import BaseGeomagModel
+from geomag_ml.models.baselines import (
+    EMPCABaseline,
+    IDWBaseline,
+    OrdinaryKrigingBaseline,
+    RidgeSchurBaseline,
+)
 from geomag_ml.models.mlp_ae import MaskedConditionalMLPAE
 from geomag_ml.models.mlp_vm import MaskedWideMLP
 from geomag_ml.utils.io import read_json, save_npz_atomic, write_json
@@ -28,6 +35,17 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "mlp_ae": MaskedConditionalMLPAE,
     "MaskedWideMLP": MaskedWideMLP,
     "mlp_vm": MaskedWideMLP,
+}
+
+BASELINE_MODEL_REGISTRY: dict[str, type[BaseGeomagModel]] = {
+    "EMPCABaseline": EMPCABaseline,
+    "empca": EMPCABaseline,
+    "RidgeSchurBaseline": RidgeSchurBaseline,
+    "ridge_schur": RidgeSchurBaseline,
+    "IDWBaseline": IDWBaseline,
+    "idw": IDWBaseline,
+    "OrdinaryKrigingBaseline": OrdinaryKrigingBaseline,
+    "ordinary_kriging": OrdinaryKrigingBaseline,
 }
 
 HISTORY_COLUMNS: tuple[str, ...] = (
@@ -246,17 +264,47 @@ def save_run_bundle(
     return target
 
 
+def load_baseline_artifact(
+    path: Path,
+    model_type_or_class: str,
+) -> BaseGeomagModel:
+    """Restore a Phase 1 baseline model from `model.npz`."""
+    key = str(model_type_or_class).strip()
+    cls = BASELINE_MODEL_REGISTRY.get(key) or BASELINE_MODEL_REGISTRY.get(key.lower())
+    if cls is None:
+        raise ValueError(
+            f"Unknown baseline model {model_type_or_class!r}; available={sorted(BASELINE_MODEL_REGISTRY)}."
+        )
+    return cls.load_npz(Path(path))
+
+
 def load_run_bundle(
     run_dir: Path,
     device: torch.device | str = "cpu",
 ) -> dict[str, Any]:
-    """Load neural run bundle (`model`, `config`, `baseline`, `scaler`, `stations`, `metrics`)."""
+    """Load Phase 1 (`model.npz`) or Phase 2–4 (`model.pt`) run bundle."""
     target = Path(run_dir)
     if not target.is_dir():
         raise FileNotFoundError(f"Artifact run directory does not exist: {target}")
 
-    model, ckpt_meta = load_model_checkpoint(target / "model.pt", device=device)
     config = read_json(target / "config.json")
+    model_pt = target / "model.pt"
+    model_npz = target / "model.npz"
+    if model_pt.is_file():
+        model: Any
+        model, ckpt_meta = load_model_checkpoint(model_pt, device=device)
+    elif model_npz.is_file():
+        model_id = str(config.get("model_class") or config.get("model_type") or "")
+        model = load_baseline_artifact(model_npz, model_id)
+        ckpt_meta = {
+            "model_class": model.__class__.__name__,
+            "model_kwargs": dict(config.get("params", {})),
+            "epoch": 0,
+            "best_val_metric_nT": None,
+        }
+    else:
+        raise FileNotFoundError(f"Neither model.pt nor model.npz found in {target}")
+
     baseline, scaler = load_scaler_json(target / "scaler.json")
     stations = read_json(target / "stations.json")
     metrics_path = target / "metrics.json"

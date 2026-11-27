@@ -31,6 +31,7 @@ from geomag_ml.utils import (
     recommended_cpu_threads,
     recommended_num_workers,
     resolve_device,
+    resolve_project_path,
     save_npz_atomic,
     set_seed,
     write_json,
@@ -140,3 +141,45 @@ def test_synthetic_dataset_works_without_backend(
     arrays, meta = build_synthetic_dataset()
     assert arrays["X_raw"].shape == (600, 12, 3)
     assert len(meta["station_codes"]) == 12
+
+
+def test_resolve_project_path_monorepo_and_cloud_bundle(tmp_path: Path) -> None:
+    """Regression test for ML-01: resolve `ml_research/` paths across monorepo and cloud bundles."""
+    # Monorepo layout: repo_root/ml_research exists
+    mono_repo = tmp_path / "repo"
+    mono_ml = mono_repo / "ml_research"
+    (mono_ml / "data_cache").mkdir(parents=True)
+    (mono_ml / "data_cache" / "ds.npz").write_bytes(b"npz")
+
+    assert (
+        resolve_project_path("ml_research/data_cache/ds.npz", ml_root=mono_ml, repo_root=mono_repo)
+        == (mono_ml / "data_cache" / "ds.npz").resolve()
+    )
+    assert (
+        resolve_project_path("data_cache/ds.npz", ml_root=mono_ml, repo_root=mono_repo)
+        == (mono_ml / "data_cache" / "ds.npz").resolve()
+    )
+
+    # Cloud bundle layout: unpacked directly into ml_work/ without repo/ml_research/
+    cloud_root = tmp_path / "content"
+    cloud_ml = cloud_root / "ml_work"
+    (cloud_ml / "data_cache").mkdir(parents=True)
+    (cloud_ml / "data_cache" / "ds.npz").write_bytes(b"npz")
+
+    assert (
+        resolve_project_path("ml_research/data_cache/ds.npz", ml_root=cloud_ml, repo_root=cloud_root)
+        == (cloud_ml / "data_cache" / "ds.npz").resolve()
+    )
+    assert (
+        resolve_project_path("ml_research/artifacts", ml_root=cloud_ml, repo_root=cloud_root)
+        == (cloud_ml / "artifacts").resolve()
+    )
+    assert (
+        resolve_project_path("data_cache/ds.npz", ml_root=cloud_ml, repo_root=cloud_root)
+        == (cloud_ml / "data_cache" / "ds.npz").resolve()
+    )
+    # Must NOT strip non-directory prefix like "ml_research_extra"
+    assert (
+        resolve_project_path("ml_research_extra/out", ml_root=cloud_ml, repo_root=cloud_root)
+        == (cloud_ml / "ml_research_extra" / "out").resolve()
+    )

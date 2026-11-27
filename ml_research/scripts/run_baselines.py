@@ -29,20 +29,11 @@ from geomag_ml.utils.io import (
     get_git_commit,
     portable_path_str,
     read_yaml,
+    resolve_project_path,
     save_npz_atomic,
     write_json,
 )
 from geomag_ml.utils.seed import set_seed
-
-
-def _resolve_repo_path(path_str: str | Path) -> Path:
-    p = Path(path_str)
-    if p.is_absolute():
-        return p
-    cand_repo = REPO_ROOT / p
-    if cand_repo.exists() or str(p).startswith("ml_research"):
-        return cand_repo
-    return ML_ROOT / p
 
 
 def _build_stations_manifest(
@@ -224,13 +215,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None, help="Optional seed override.")
     args = parser.parse_args()
 
-    cfg = read_yaml(_resolve_repo_path(args.config))
+    cfg = read_yaml(resolve_project_path(args.config))
     seed = int(args.seed if args.seed is not None else cfg.get("seed", 42))
     set_seed(seed)
     resolve_device("cpu")
 
-    dataset_path = _resolve_repo_path(args.dataset or cfg["dataset_path"])
-    out_dir = _resolve_repo_path(args.out_dir or cfg.get("out_dir", ML_ROOT / "artifacts"))
+    dataset_path = resolve_project_path(args.dataset or cfg["dataset_path"])
+    out_dir = resolve_project_path(args.out_dir or cfg.get("out_dir", ML_ROOT / "artifacts"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     dataset, meta = load_ml_dataset(dataset_path, validate=True)

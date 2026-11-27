@@ -141,6 +141,36 @@ def load_npz(path: Path) -> dict[str, np.ndarray]:
         return {key: archive[key] for key in archive.files}
 
 
+def resolve_project_path(
+    path_str: str | Path,
+    *,
+    ml_root: Path | None = None,
+    repo_root: Path | None = None,
+) -> Path:
+    """Resolve relative CLI/config paths seamlessly across monorepo and cloud bundles."""
+    p = Path(path_str)
+    if p.is_absolute():
+        return p
+
+    ml_r = Path(ml_root).resolve() if ml_root is not None else Path(__file__).resolve().parents[2]
+    repo_r = Path(repo_root).resolve() if repo_root is not None else ml_r.parent
+    has_ml_subdir = (repo_r / "ml_research").is_dir()
+
+    if p.parts and p.parts[0] == "ml_research":
+        if has_ml_subdir:
+            return repo_r / p
+        sub = Path(*p.parts[1:]) if len(p.parts) > 1 else Path(".")
+        return ml_r / sub
+
+    cand_repo = repo_r / p
+    if cand_repo.exists():
+        return cand_repo
+    cand_ml = ml_r / p
+    if cand_ml.exists():
+        return cand_ml
+    return ml_r / p
+
+
 def portable_path_str(path: Path | str, *, repo_root: Path | None = None) -> str:
     """Serialize a filesystem path portably relative to `repo_root` (or `ML_ROOT` in cloud bundles)."""
     target = Path(path).resolve()

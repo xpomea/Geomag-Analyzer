@@ -28,6 +28,15 @@ from geomag_ml.train.losses import (
 )
 
 
+VALID_TRAIN_MASK_MODES: tuple[str, ...] = ("none", "m1_m2", "m1_m2_m3", "custom")
+_ALLOWED_MASK_KEYS: frozenset[str] = frozenset({"M1", "M2", "M3", "M4", "none"})
+_DEFAULT_MASK_PROBS_BY_MODE: dict[str, dict[str, float]] = {
+    "none": {"none": 1.0},
+    "m1_m2": {"M1": 0.30, "M2": 0.70},
+    "m1_m2_m3": {"M1": 0.35, "M2": 0.35, "M3": 0.30},
+}
+
+
 @dataclass
 class TrainConfig:
     """Hyperparameters and training-mask settings for `Trainer`."""
@@ -49,10 +58,8 @@ class TrainConfig:
     lambda_cov: float = 0.0
     lambda_cons: float = 0.0
     cov_min_batch_size: int = 8
-    train_mask_mode: str = "m1_m2"
-    mask_probs: dict[str, float] = field(
-        default_factory=lambda: {"M1": 0.35, "M2": 0.35, "M3": 0.30}
-    )
+    train_mask_mode: str = "m1_m2_m3"
+    mask_probs: dict[str, float] | None = None
     m2_drop_range: tuple[float, float] = (0.20, 0.35)
     m3_radius_range_km: tuple[float, float] = (500.0, 1000.0)
     min_obs: int = 10
@@ -60,6 +67,41 @@ class TrainConfig:
     val_m2_repeats: int = 3
     eval_batch_size: int = 1024
     seed: int = 42
+
+    def __post_init__(self) -> None:
+        self.train_mask_mode = str(self.train_mask_mode).strip().lower()
+        if self.train_mask_mode not in VALID_TRAIN_MASK_MODES:
+            raise ValueError(
+                f"Unsupported train_mask_mode {self.train_mask_mode!r}; "
+                f"expected one of {VALID_TRAIN_MASK_MODES}."
+            )
+        if self.mask_probs is None:
+            if self.train_mask_mode == "custom":
+                raise ValueError(
+                    "mask_probs must be explicitly provided when train_mask_mode='custom'."
+                )
+            self.mask_probs = dict(_DEFAULT_MASK_PROBS_BY_MODE[self.train_mask_mode])
+            return
+
+        cleaned = {str(k): float(v) for k, v in dict(self.mask_probs).items()}
+        unknown_keys = set(cleaned) - _ALLOWED_MASK_KEYS
+        if unknown_keys:
+            raise ValueError(f"Unsupported mask_probs keys {sorted(unknown_keys)}.")
+        if any(v < 0.0 for v in cleaned.values()):
+            raise ValueError(f"mask_probs cannot contain negative weights: {cleaned}.")
+        if self.train_mask_mode != "none":
+            active_keys = {k for k, v in cleaned.items() if v > 0.0}
+            if not active_keys:
+                raise ValueError(f"mask_probs must have positive total weight, got {cleaned}.")
+            if self.train_mask_mode == "m1_m2" and not (active_keys <= {"M1", "M2"}):
+                raise ValueError(
+                    f"train_mask_mode='m1_m2' only allows M1/M2 masks, got {sorted(active_keys)}."
+                )
+            if self.train_mask_mode == "m1_m2_m3" and not (active_keys <= {"M1", "M2", "M3"}):
+                raise ValueError(
+                    f"train_mask_mode='m1_m2_m3' only allows M1/M2/M3 masks, got {sorted(active_keys)}."
+                )
+        self.mask_probs = cleaned
 
     @classmethod
     def from_dict(cls, cfg: Mapping[str, Any], *, seed: int | None = None) -> TrainConfig:
@@ -72,7 +114,7 @@ class TrainConfig:
             if k in ("m2_drop_range", "m3_radius_range_km"):
                 kwargs[k] = (float(v[0]), float(v[1]))
             elif k == "mask_probs":
-                kwargs[k] = {str(mk): float(mv) for mk, mv in dict(v).items()}
+                kwargs[k] = None if v is None else {str(mk): float(mv) for mk, mv in dict(v).items()}
             else:
                 kwargs[k] = v
         if seed is not None:

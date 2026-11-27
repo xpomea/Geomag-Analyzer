@@ -25,18 +25,14 @@ from geomag_ml.train.artifacts import (
 )
 from geomag_ml.train.trainer import TrainConfig, Trainer
 from geomag_ml.utils.device import resolve_device
-from geomag_ml.utils.io import compute_sha256, get_git_commit, portable_path_str, read_yaml
+from geomag_ml.utils.io import (
+    compute_sha256,
+    get_git_commit,
+    portable_path_str,
+    read_yaml,
+    resolve_project_path,
+)
 from geomag_ml.utils.seed import set_seed
-
-
-def _resolve_repo_path(path_str: str | Path) -> Path:
-    p = Path(path_str)
-    if p.is_absolute():
-        return p
-    cand_repo = REPO_ROOT / p
-    if cand_repo.exists() or str(p).startswith("ml_research"):
-        return cand_repo
-    return ML_ROOT / p
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -171,12 +167,12 @@ def main() -> None:
     parser.add_argument("--quiet", action="store_true", help="Suppress per-epoch logs.")
     args = parser.parse_args()
 
-    cfg = read_yaml(_resolve_repo_path(args.config))
+    cfg = read_yaml(resolve_project_path(args.config))
     seed = int(args.seed if args.seed is not None else cfg.get("seed", 42))
     device = resolve_device(args.device)
 
-    dataset_path = _resolve_repo_path(args.dataset or cfg["dataset_path"])
-    out_dir = _resolve_repo_path(args.out_dir or cfg.get("out_dir", ML_ROOT / "artifacts"))
+    dataset_path = resolve_project_path(args.dataset or cfg["dataset_path"])
+    out_dir = resolve_project_path(args.out_dir or cfg.get("out_dir", ML_ROOT / "artifacts"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     dataset, meta = load_ml_dataset(dataset_path, validate=True)

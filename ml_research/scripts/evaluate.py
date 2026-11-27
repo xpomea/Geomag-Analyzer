@@ -6,24 +6,25 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from geomag_ml import ML_ROOT, REPO_ROOT
 from geomag_ml.data.masks import MaskGenerator
 from geomag_ml.data.schema import load_ml_dataset
 from geomag_ml.data.splits import create_splits
 from geomag_ml.eval.evaluator import evaluate_model_on_fold
 from geomag_ml.train.artifacts import load_run_bundle
 from geomag_ml.utils.device import resolve_device
-from geomag_ml.utils.io import compute_sha256, write_json
+from geomag_ml.utils.io import compute_sha256, resolve_project_path, write_json
 
 
-def _resolve_repo_path(path_str: str | Path) -> Path:
-    p = Path(path_str)
-    if p.is_absolute():
-        return p
-    cand_repo = REPO_ROOT / p
-    if cand_repo.exists() or str(p).startswith("ml_research"):
-        return cand_repo
-    return ML_ROOT / p
+def _safe_vec_rmse(metrics_obj: dict[str, Any], mode: str, belt: str) -> float | None:
+    bucket = metrics_obj.get("eval_masks", {}).get(mode)
+    if not isinstance(bucket, dict) or "status" in bucket:
+        return None
+    val = bucket.get(belt, {}).get("vector_3d", {}).get("rmse_nT")
+    return float(val) if val is not None else None
+
+
+def _fmt_rmse(val: float | None) -> str:
+    return "N/A" if val is None else f"{val:.3f} nT"
 
 
 def _collect_metric_diffs(
@@ -82,11 +83,11 @@ def main() -> None:
     args = parser.parse_args()
 
     device = resolve_device(args.device)
-    run_dir = _resolve_repo_path(args.run_dir)
+    run_dir = resolve_project_path(args.run_dir)
     bundle = load_run_bundle(run_dir, device=device)
 
     cfg = bundle["config"]
-    dataset_path = _resolve_repo_path(args.dataset or cfg["dataset_path"])
+    dataset_path = resolve_project_path(args.dataset or cfg["dataset_path"])
     dataset, meta = load_ml_dataset(dataset_path, validate=True)
     actual_sha = meta.get("dataset_sha256") or compute_sha256(dataset_path)
     expected_sha = cfg.get("dataset_sha256")
@@ -136,14 +137,14 @@ def main() -> None:
     )
 
     if args.out_json is not None:
-        write_json(_resolve_repo_path(args.out_json), recomputed, nan_to_null=False)
+        write_json(resolve_project_path(args.out_json), recomputed, nan_to_null=False)
 
-    m1_eu = recomputed["eval_masks"].get("M1", {}).get("europe_mid", {}).get("vector_3d", {}).get("rmse_nT")
-    m1_aur = recomputed["eval_masks"].get("M1", {}).get("auroral", {}).get("vector_3d", {}).get("rmse_nT")
-    m2_gl = recomputed["eval_masks"].get("M2", {}).get("global", {}).get("vector_3d", {}).get("rmse_nT")
+    m1_eu = _safe_vec_rmse(recomputed, "M1", "europe_mid")
+    m1_aur = _safe_vec_rmse(recomputed, "M1", "auroral")
+    m2_gl = _safe_vec_rmse(recomputed, "M2", "global")
     print(
         f"Evaluated {run_dir.name} ({args.eval_split}) on {device}: "
-        f"M1 EU={m1_eu:.3f} nT, M1 AUR={m1_aur:.3f} nT, M2 GL={m2_gl:.3f} nT"
+        f"M1 EU={_fmt_rmse(m1_eu)}, M1 AUR={_fmt_rmse(m1_aur)}, M2 GL={_fmt_rmse(m2_gl)}"
     )
 
     saved_metrics = bundle.get("metrics")

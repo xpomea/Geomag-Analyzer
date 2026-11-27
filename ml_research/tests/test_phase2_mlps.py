@@ -627,3 +627,165 @@ def test_phase2_gate_report_generation(tmp_path: Path) -> None:
     # Compression price on M2 auroral: 82.0 - 60.0 = 22.0 nT
     cp_aur = report["compression_price"]["k5"]["delta_rmse_a_minus_b"]["M2"]["auroral"]["vector_3d"]
     assert cp_aur["delta_a_minus_b_nT"]["mean"] == pytest.approx(22.0)
+
+
+def test_train_config_mask_mode_consistency_and_validation() -> None:
+    """Regression test for ML-02: consistent defaults and strict train_mask_mode validation."""
+    default_cfg = TrainConfig()
+    assert default_cfg.train_mask_mode == "m1_m2_m3"
+    assert default_cfg.mask_probs is not None
+    assert set(default_cfg.mask_probs.keys()) == {"M1", "M2", "M3"}
+
+    m12_cfg = TrainConfig(train_mask_mode="m1_m2")
+    assert m12_cfg.mask_probs is not None
+    assert set(m12_cfg.mask_probs.keys()) <= {"M1", "M2"}
+
+    # Inherited mask_probs from base YAML must still work when ablation sets train_mask_mode='none'
+    none_cfg = TrainConfig(train_mask_mode="none", mask_probs={"M1": 0.3, "M2": 0.7})
+    assert none_cfg.train_mask_mode == "none"
+
+    with pytest.raises(ValueError, match="Unsupported train_mask_mode"):
+        TrainConfig(train_mask_mode="no_mask")
+
+    with pytest.raises(ValueError, match="only allows M1/M2"):
+        TrainConfig(train_mask_mode="m1_m2", mask_probs={"M1": 0.5, "M3": 0.5})
+
+    with pytest.raises(ValueError, match="explicitly provided"):
+        TrainConfig(train_mask_mode="custom")
+
+
+def test_phase1_bundle_loading_and_none_safe_gate(
+    synthetic_dataset: tuple[dict[str, np.ndarray], dict[str, Any]],
+    tmp_path: Path,
+) -> None:
+    """Regression test for ML-03: load Phase 1 model.npz bundles and handle None belt metrics cleanly."""
+    from geomag_ml.data.preprocessing import save_scaler_json
+    from geomag_ml.models.baselines import RidgeSchurBaseline
+
+    dataset, meta, fold, est, scaler, _, x_work, mask_gen = _make_clean_ep_split(synthetic_dataset)
+    in_tr = fold.in_train_mask
+    ridge = RidgeSchurBaseline(alpha_grid=(0.1, 1.0), n_em_iters=5).fit(
+        x_work,
+        dataset["M_qc_clean"],
+        fold.train_idx,
+        in_tr,
+        val_idx=fold.val_idx,
+        mask_generator=mask_gen,
+        scaler=scaler,
+    )
+    metrics, _ = evaluate_model_on_fold(
+        ridge,
+        dataset,
+        meta,
+        fold,
+        est,
+        scaler,
+        mask_gen,
+        eval_split="test",
+        eval_modes=("M1", "M2"),
+        m2_repeats=2,
+        min_obs=4,
+    )
+
+    p1_dir = tmp_path / "p1_B_ridge_test_f0"
+    p1_dir.mkdir(parents=True, exist_ok=True)
+    ridge.save_npz(p1_dir / "model.npz")
+    save_scaler_json(p1_dir / "scaler.json", est, scaler)
+    write_json(
+        p1_dir / "stations.json",
+        build_stations_manifest(meta, dataset, in_tr, fold.is_zero_shot_mask),
+    )
+    write_json(p1_dir / "metrics.json", metrics, nan_to_null=False)
+    write_json(
+        p1_dir / "config.json",
+        {
+            "run_id": p1_dir.name,
+            "phase": "phase1",
+            "branch": "B",
+            "tag": "ridge_zscore",
+            "model_type": "ridge_schur",
+            "model_class": "RidgeSchurBaseline",
+            "params": {"alpha_grid": [0.1, 1.0], "n_em_iters": 5},
+            "fold_id": 0,
+            "dataset_sha256": "syn",
+            "split_protocol": "looe_4fold",
+            "baseless_policy": "train_quiet_proxy",
+            "zero_shot": False,
+        },
+    )
+
+    bundle = load_run_bundle(p1_dir, device="cpu")
+    assert isinstance(bundle["model"], RidgeSchurBaseline)
+    re_metrics, _ = evaluate_model_on_fold(
+        bundle["model"],
+        dataset,
+        meta,
+        fold,
+        bundle["baseline"],
+        bundle["scaler"],
+        mask_gen,
+        eval_split="test",
+        eval_modes=("M1", "M2"),
+        m2_repeats=2,
+        min_obs=4,
+    )
+    assert abs(
+        float(metrics["eval_masks"]["M2"]["global"]["vector_3d"]["rmse_nT"])
+        - float(re_metrics["eval_masks"]["M2"]["global"]["vector_3d"]["rmse_nT"])
+    ) < 1e-5
+
+    # Verify check_phase2_gate handles None auroral metrics without TypeError
+    gate_dir = tmp_path / "gate_none"
+    for ph, br, tg, mkwargs in (
+        ("phase1", "B", "ridge_zscore", {}),
+        ("phase2", "B", "wide_mlp_zscore", {}),
+    ):
+        rdir = gate_dir / f"{ph}_{br}_{tg}_f0"
+        write_json(
+            rdir / "config.json",
+            {
+                "run_id": rdir.name,
+                "phase": ph,
+                "branch": br,
+                "tag": tg,
+                "fold_id": 0,
+                "dataset_sha256": "syn",
+                "split_protocol": "looe_4fold",
+                "scaling": "zscore_per_station",
+                "baseless_policy": "train_quiet_proxy",
+                "zero_shot": False,
+                "smoke": False,
+                "params": {},
+                "model_kwargs": mkwargs,
+            },
+        )
+        empty_aur = {
+            mode: {
+                belt: {
+                    c: (
+                        {"rmse_nT": None, "mae_nT": None, "r2": None, "pearson_r": None, "n_points": 0}
+                        if belt == "auroral"
+                        else {"rmse_nT": 10.0, "mae_nT": 8.0, "r2": 0.9, "pearson_r": 0.95, "n_points": 50}
+                    )
+                    for c in ("vector_3d", "X", "Y", "Z")
+                }
+                for belt in ("global", "europe_mid", "auroral", "canada")
+            }
+            for mode in ("M1", "M2", "M3_500km", "M3_1000km", "M4")
+        }
+        write_json(rdir / "metrics.json", {"eval_masks": empty_aur}, nan_to_null=False)
+
+    gate_mod = _load_gate_module()
+    report = gate_mod.build_phase2_gate_report(gate_dir, expected_folds=1)
+    assert report["gate_summary"]["wide_mlp_beats_ridge_m2_auroral"] is None
+    assert report["gate_summary"]["wide_mlp_beats_ridge_m4_auroral"] is None
+
+    # Verify evaluate.py formatting helper handles None metrics safely
+    eval_path = ML_ROOT / "scripts" / "evaluate.py"
+    eval_spec = importlib.util.spec_from_file_location("evaluate_script", eval_path)
+    assert eval_spec is not None and eval_spec.loader is not None
+    eval_mod = importlib.util.module_from_spec(eval_spec)
+    eval_spec.loader.exec_module(eval_mod)
+    assert eval_mod._fmt_rmse(None) == "N/A"
+    assert eval_mod._fmt_rmse(12.3456) == "12.346 nT"
+    assert eval_mod._safe_vec_rmse({"eval_masks": empty_aur}, "M1", "auroral") is None

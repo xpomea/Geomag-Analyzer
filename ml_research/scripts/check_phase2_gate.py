@@ -10,22 +10,12 @@ from typing import Any
 
 import numpy as np
 
-from geomag_ml import ML_ROOT, REPO_ROOT
-from geomag_ml.utils.io import read_json, write_json
+from geomag_ml import ML_ROOT
+from geomag_ml.utils.io import read_json, resolve_project_path, write_json
 
 DEFAULT_MODES: tuple[str, ...] = ("M1", "M2", "M3_500km", "M3_1000km", "M4")
 DEFAULT_BELTS: tuple[str, ...] = ("global", "europe_mid", "auroral", "canada")
 DEFAULT_COMPS: tuple[str, ...] = ("vector_3d", "X", "Y", "Z")
-
-
-def _resolve_repo_path(path_str: str | Path) -> Path:
-    p = Path(path_str)
-    if p.is_absolute():
-        return p
-    cand_repo = REPO_ROOT / p
-    if cand_repo.exists() or str(p).startswith("ml_research"):
-        return cand_repo
-    return ML_ROOT / p
 
 
 def _agg_values(vals: list[float]) -> dict[str, Any] | None:
@@ -369,26 +359,27 @@ def build_phase2_gate_report(
         )
         and len(branch_b_ablations) > 0,
     }
+    def _delta_mean(comp: dict[str, Any], mode: str, belt: str) -> float | None:
+        delta = comp.get(mode, {}).get(belt, {}).get("vector_3d", {}).get("delta_a_minus_b_nT")
+        if isinstance(delta, dict) and delta.get("mean") is not None:
+            return float(delta["mean"])
+        return None
+
     if branch_b_vs_ridge:
         comp = branch_b_vs_ridge["comparison"]
-        gate_summary["wide_mlp_beats_ridge_m2_auroral"] = (
-            comp["M2"]["auroral"]["vector_3d"]["delta_a_minus_b_nT"]["mean"] < 0.0
-        )
-        gate_summary["wide_mlp_beats_ridge_m3_500km_auroral"] = (
-            comp["M3_500km"]["auroral"]["vector_3d"]["delta_a_minus_b_nT"]["mean"] < 0.0
-        )
-        gate_summary["wide_mlp_beats_ridge_m3_1000km_auroral"] = (
-            comp["M3_1000km"]["auroral"]["vector_3d"]["delta_a_minus_b_nT"]["mean"] < 0.0
-        )
-        gate_summary["wide_mlp_beats_ridge_m3_1000km_global"] = (
-            comp["M3_1000km"]["global"]["vector_3d"]["delta_a_minus_b_nT"]["mean"] < 0.0
-        )
-        gate_summary["wide_mlp_beats_ridge_m4_auroral"] = (
-            comp["M4"]["auroral"]["vector_3d"]["delta_a_minus_b_nT"]["mean"] < 0.0
-        )
+        for key, mode, belt in (
+            ("wide_mlp_beats_ridge_m2_auroral", "M2", "auroral"),
+            ("wide_mlp_beats_ridge_m3_500km_auroral", "M3_500km", "auroral"),
+            ("wide_mlp_beats_ridge_m3_1000km_auroral", "M3_1000km", "auroral"),
+            ("wide_mlp_beats_ridge_m3_1000km_global", "M3_1000km", "global"),
+            ("wide_mlp_beats_ridge_m4_auroral", "M4", "auroral"),
+        ):
+            val = _delta_mean(comp, mode, belt)
+            gate_summary[key] = (val < 0.0) if val is not None else None
     if "k5" in branch_a_vs_pca and "vs_empca" in branch_a_vs_pca["k5"]:
-        m2_cmp = branch_a_vs_pca["k5"]["vs_empca"]["comparison"]["M2"]["global"]["vector_3d"]
-        gate_summary["mlp_ae_k5_vs_pca_k5_m2_global_delta_nT"] = m2_cmp["delta_a_minus_b_nT"]["mean"]
+        gate_summary["mlp_ae_k5_vs_pca_k5_m2_global_delta_nT"] = _delta_mean(
+            branch_a_vs_pca["k5"]["vs_empca"]["comparison"], "M2", "global"
+        )
 
     return {
         "dataset_sha256": ref_sha,
@@ -494,8 +485,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    artifacts_dir = _resolve_repo_path(args.artifacts_dir)
-    out_path = _resolve_repo_path(args.out)
+    artifacts_dir = resolve_project_path(args.artifacts_dir)
+    out_path = resolve_project_path(args.out)
 
     report = build_phase2_gate_report(
         artifacts_dir,
