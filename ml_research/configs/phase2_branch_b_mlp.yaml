@@ -1,0 +1,64 @@
+# Phase 2 Branch B: Masked Wide Residual MLP (single unified network) across 4-fold LOOE-CV
+phase: phase2
+phase_prefix: p2
+branch: B
+model_type: mlp_vm
+dataset_path: ml_research/data_cache/geomag_ml_oct2026_clean_v1.npz
+out_dir: ml_research/artifacts
+seed: 42
+
+split_protocol: looe_4fold
+baseline_mode: temp_train_quiet_proxy
+baseless_policy: train_quiet_proxy
+variation_step_policy: flag_qc_exclude
+default_zero_shot_stations: ["LVV", "BEL", "MEA"]
+
+eval:
+  modes: ["M1", "M2", "M3_500km", "M3_1000km", "M4"]
+  m2_drop_frac: 0.25
+  m2_repeats: 5
+  min_obs: 10
+  stability_drop_fracs: [0.20, 0.30, 0.40]
+  stability_repeats: 5
+
+base:
+  tag: wide_mlp_zscore
+  scaler_mode: zscore_per_station
+  model:
+    hidden_dim: 512
+    n_blocks: 3
+    dropout: 0.15
+  train:
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    batch_size: 128
+    max_epochs: 100
+    warmup_epochs: 5
+    min_lr_ratio: 0.01
+    early_stopping_patience: 15
+    grad_clip: 1.0
+    use_amp: true
+    huber_delta: 1.0
+    w_tgt: 4.0
+    w_obs: 0.25
+    train_mask_mode: m1_m2_m3
+    mask_probs:
+      M1: 0.35
+      M2: 0.35
+      M3: 0.30
+    m2_drop_range: [0.20, 0.35]
+    m3_radius_range_km: [500.0, 1000.0]
+    min_obs: 10
+    val_m2_drop_frac: 0.25
+    val_m2_repeats: 3
+    eval_batch_size: 1024
+
+ablations:
+  w_obs_0:
+    tag: wide_mlp_wobs0_zscore
+    train:
+      w_obs: 0.0
+
+  asinh:
+    tag: wide_mlp_asinh
+    scaler_mode: asinh_global

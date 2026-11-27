@@ -1,3 +1,6 @@
+# Override root .gitignore's unanchored `data/` rule for the geomag_ml.data Python package
+!geomag_ml/data/
+
 # Generated datasets, external downloads, and run artifacts
 data_cache/
 data_external/

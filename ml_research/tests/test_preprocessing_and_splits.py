@@ -350,3 +350,248 @@ def test_scaler_min_train_points_alignment_and_save_scaler_json(
     saved = read_json(out_json)
     assert saved["B0_nT"][sua_idx] == [None, None, None]
     assert saved["in_train_stations"][sua_idx] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 (T1.1): Splits & Window Boundary Guard tests
+# ---------------------------------------------------------------------------
+
+def test_looe_4fold_oct2026_real_qc_and_omni_invariants(ml_root: Path) -> None:
+    """Verify all T1.1 QC, OMNI, gap, and night-MLT invariants on the real Oct-2026 dataset."""
+    npz_path = ml_root / "data_cache" / "geomag_ml_oct2026_clean_v1.npz"
+    if not npz_path.is_file():
+        pytest.skip("Oct-2026 clean dataset not present in this environment")
+
+    from geomag_ml.data.schema import OMNI_COLS, load_ml_dataset
+    from geomag_ml.data.splits import (
+        build_looe_4fold_splits,
+        compute_min_temporal_gap_sec,
+    )
+
+    arrays, meta = load_ml_dataset(npz_path, validate=True)
+    codes = meta["station_codes"]
+    sua_idx = codes.index("SUA")
+    ae_col = OMNI_COLS.index("ae")
+
+    folds = build_looe_4fold_splits(arrays, meta)
+    assert len(folds) == 4
+
+    ts = arrays["timestamps_unix_s"]
+    m_valid = arrays["M_valid"]
+    m_qc = arrays["M_qc_clean"]
+    mlt = arrays["mlt_hours"]
+    is_night = (mlt >= 22.0) | (mlt <= 4.0)
+
+    for fold in folds:
+        assert compute_min_temporal_gap_sec(ts, fold.train_idx, fold.test_idx) >= 86400
+        assert compute_min_temporal_gap_sec(ts, fold.train_idx, fold.val_idx) >= 86400
+        assert compute_min_temporal_gap_sec(ts, fold.val_idx, fold.test_idx) >= 86400
+
+        omni_train_valid = int(np.sum(np.isfinite(arrays["sw_omni"][fold.train_idx, ae_col])))
+        assert omni_train_valid > 0
+
+        tr_valid_cnt = np.sum(m_valid[fold.train_idx], axis=0)
+        tr_qc_cnt = np.sum(m_qc[fold.train_idx], axis=0)
+        te_valid_cnt = np.sum(m_valid[fold.test_idx], axis=0)
+        te_qc_cnt = np.sum(m_qc[fold.test_idx], axis=0)
+
+        zero_tr_valid = [i for i in range(len(codes)) if te_valid_cnt[i] > 0 and tr_valid_cnt[i] == 0]
+        zero_tr_qc = [i for i in range(len(codes)) if te_qc_cnt[i] > 0 and tr_qc_cnt[i] == 0]
+
+        if fold.fold_id == 3:
+            assert zero_tr_valid == [sua_idx]
+            assert zero_tr_qc == [sua_idx]
+        else:
+            assert zero_tr_valid == []
+            assert zero_tr_qc == []
+
+        for i in range(len(codes)):
+            if te_qc_cnt[i] > 0 and i not in zero_tr_qc:
+                assert tr_qc_cnt[i] >= 60
+                night_qc = int(np.sum(m_qc[fold.train_idx, i] & is_night[fold.train_idx, i]))
+                assert night_qc >= 60
+
+
+def test_looe_4fold_zero_shot_station_mask_and_random_forbidden(
+    synthetic_dataset: tuple[dict[str, np.ndarray], dict],
+) -> None:
+    """Verify Zero-Shot station masking and rejection of random minute-level splitting."""
+    from geomag_ml.data.splits import DEFAULT_ZERO_SHOT_STATIONS, create_splits
+
+    arrays, meta = synthetic_dataset
+    with pytest.raises(ValueError, match="forbidden"):
+        create_splits("random", arrays, meta)
+
+    # Expand synthetic 2-episode dataset to 4 episodes separated by 3 days each.
+    ep0 = slice(0, 300)
+    ep_list = []
+    for k in range(4):
+        shift = k * 3 * 86400
+        d = {
+            "X_raw": arrays["X_raw"][ep0].copy(),
+            "M_valid": arrays["M_valid"][ep0].copy(),
+            "M_qc_clean": arrays["M_qc_clean"][ep0].copy(),
+            "timestamps_unix_s": arrays["timestamps_unix_s"][ep0].copy() + shift,
+            "episode_idx": np.full(300, k, dtype=np.int16),
+            "event_flags": arrays["event_flags"][ep0].copy(),
+        }
+        ep_list.append(d)
+    ds4 = {
+        k: np.concatenate([ep[k] for ep in ep_list], axis=0)
+        for k in ep_list[0]
+    }
+    ds4["episode_bounds"] = np.array([[0, 300], [300, 600], [600, 900], [900, 1200]], dtype=np.int64)
+    ds4["station_has_baseline"] = arrays["station_has_baseline"].copy()
+
+    folds = create_splits("looe_4fold", ds4, meta, zero_shot_stations=DEFAULT_ZERO_SHOT_STATIONS)
+    codes = meta["station_codes"]
+    zs_expected = [codes.index(c) for c in DEFAULT_ZERO_SHOT_STATIONS]
+    for f in folds:
+        for idx in zs_expected:
+            assert f.is_zero_shot_mask[idx]
+            assert not f.station_train_mask[idx]
+            assert not f.in_train_mask[idx]
+
+
+def test_block_temporal_purge_gap_and_eclipse_spe_enforcement(
+    synthetic_dataset: tuple[dict[str, np.ndarray], dict],
+) -> None:
+    """Verify >= 1 day purge gap, forced eclipse/SPE placement in test, and violation AssertionError."""
+    from geomag_ml.data.schema import EVENT_FLAG_ECLIPSE, EVENT_FLAG_QUIET, EVENT_FLAG_SPE
+    from geomag_ml.data.splits import (
+        assert_no_eclipse_spe_in_train_or_val,
+        compute_min_temporal_gap_sec,
+        create_splits,
+    )
+
+    arrays, meta = synthetic_dataset
+    # Construct continuous 30-day dataset (43,200 min) so 1-day purge buffers around relocated events leave all splits non-empty
+    n_days = 30
+    n_t = n_days * 1440
+    t0 = int(arrays["timestamps_unix_s"][0])
+    ts = t0 + np.arange(n_t, dtype=np.int64) * 60
+    n_st = len(meta["station_codes"])
+
+    ev = np.full(n_t, EVENT_FLAG_QUIET, dtype=np.uint8)
+    # Inject eclipse during day 2 (inside initial train range) and SPE during day 20 (inside initial val range)
+    ev[2 * 1440 : 2 * 1440 + 180] = EVENT_FLAG_ECLIPSE
+    ev[20 * 1440 : 20 * 1440 + 120] = EVENT_FLAG_SPE
+
+    ds = {
+        "X_raw": np.ones((n_t, n_st, 3), dtype=np.float32),
+        "M_valid": np.ones((n_t, n_st), dtype=bool),
+        "M_qc_clean": np.ones((n_t, n_st), dtype=bool),
+        "timestamps_unix_s": ts,
+        "episode_idx": np.zeros(n_t, dtype=np.int16),
+        "episode_bounds": np.array([[0, n_t]], dtype=np.int64),
+        "station_has_baseline": arrays["station_has_baseline"].copy(),
+        "event_flags": ev,
+    }
+
+    with pytest.raises(ValueError, match="purge_gap_min"):
+        create_splits("block_temporal", ds, meta, purge_gap_min=720)
+
+    folds = create_splits("block_temporal", ds, meta, purge_gap_min=1440)
+    fold = folds[0]
+
+    assert compute_min_temporal_gap_sec(ts, fold.train_idx, fold.test_idx) >= 86400
+    assert compute_min_temporal_gap_sec(ts, fold.train_idx, fold.val_idx) >= 86400
+    assert compute_min_temporal_gap_sec(ts, fold.val_idx, fold.test_idx) >= 86400
+
+    special_idx = np.flatnonzero((ev & (EVENT_FLAG_ECLIPSE | EVENT_FLAG_SPE)) != 0)
+    assert np.all(np.isin(special_idx, fold.test_idx))
+    assert not np.any(np.isin(special_idx, fold.train_idx))
+    assert not np.any(np.isin(special_idx, fold.val_idx))
+
+    with pytest.raises(AssertionError, match="Eclipse/SPE"):
+        assert_no_eclipse_spe_in_train_or_val(
+            ev, np.concatenate([fold.train_idx, special_idx[:1]]), fold.val_idx
+        )
+
+
+def test_build_valid_window_anchors_causal_and_centered() -> None:
+    """Verify exact window containment with zero episode, split, or timestamp-step crossings."""
+    from geomag_ml.data.splits import build_valid_window_anchors
+
+    # Episode 0: [0..100), Episode 1: [100..200) with a 120s jump at index 150
+    t_ep0 = 1_700_000_000 + np.arange(100, dtype=np.int64) * 60
+    t_ep1 = t_ep0[-1] + 86400 + np.arange(100, dtype=np.int64) * 60
+    t_ep1[50:] += 60  # introduce 120s gap between index 149 and 150
+    ts = np.concatenate([t_ep0, t_ep1])
+    ep = np.concatenate([np.zeros(100, dtype=np.int16), np.ones(100, dtype=np.int16)])
+
+    # Split leaves out [80..100) to also test split boundary inside ep0
+    split_idx = np.concatenate([np.arange(0, 80, dtype=np.int64), np.arange(100, 200, dtype=np.int64)])
+
+    w = 16
+    anchors_causal = build_valid_window_anchors(ts, ep, split_idx, w, mode="causal")
+    expected_causal = np.concatenate(
+        [
+            np.arange(w - 1, 80, dtype=np.int64),
+            np.arange(100 + w - 1, 150, dtype=np.int64),
+            np.arange(150 + w - 1, 200, dtype=np.int64),
+        ]
+    )
+    assert np.array_equal(anchors_causal, expected_causal)
+    for t in anchors_causal:
+        win = np.arange(t - w + 1, t + 1)
+        assert np.all(np.isin(win, split_idx))
+        assert np.all(ep[win] == ep[t])
+        assert np.all(np.diff(ts[win]) == 60)
+
+    anchors_centered = build_valid_window_anchors(ts, ep, split_idx, w, mode="centered")
+    left, right = w // 2, w // 2 - 1
+    expected_centered = np.concatenate(
+        [
+            np.arange(left, 80 - right, dtype=np.int64),
+            np.arange(100 + left, 150 - right, dtype=np.int64),
+            np.arange(150 + left, 200 - right, dtype=np.int64),
+        ]
+    )
+    assert np.array_equal(anchors_centered, expected_centered)
+    for t in anchors_centered:
+        win = np.arange(t - left, t + right + 1)
+        assert np.all(np.isin(win, split_idx))
+        assert np.all(ep[win] == ep[t])
+        assert np.all(np.diff(ts[win]) == 60)
+
+
+def test_geomag_ml_data_package_not_gitignored(repo_root: Path) -> None:
+    """Regression test for ML-01: geomag_ml/data/*.py must not be shadowed by root `data/` ignore."""
+    import shutil
+    import subprocess
+
+    if not (repo_root / ".git").exists() or shutil.which("git") is None:
+        pytest.skip("Git repository metadata or git CLI unavailable")
+
+    tracked_candidates = [
+        "ml_research/geomag_ml/data/__init__.py",
+        "ml_research/geomag_ml/data/schema.py",
+        "ml_research/geomag_ml/data/build_dataset.py",
+        "ml_research/geomag_ml/data/ingest_extended.py",
+        "ml_research/geomag_ml/data/preprocessing.py",
+        "ml_research/geomag_ml/data/splits.py",
+        "ml_research/geomag_ml/data/masks.py",
+    ]
+    res = subprocess.run(
+        ["git", "check-ignore", "-v", *tracked_candidates],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert res.returncode == 1, f"geomag_ml/data files are gitignored:\n{res.stdout}"
+    assert res.stdout.strip() == ""
+
+    cache_res = subprocess.run(
+        ["git", "check-ignore", "-v", "ml_research/geomag_ml/data/__pycache__/dummy.pyc"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert cache_res.returncode == 0
+
+

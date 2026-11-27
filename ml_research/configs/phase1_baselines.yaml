@@ -1,0 +1,169 @@
+# Phase 1: Linear & geostatistical baselines (Branches A and B) across 4-fold LOOE-CV
+dataset_path: ml_research/data_cache/geomag_ml_oct2026_clean_v1.npz
+out_dir: ml_research/artifacts
+seed: 42
+
+split_protocol: looe_4fold
+baseline_mode: temp_train_quiet_proxy
+baseless_policy: train_quiet_proxy
+variation_step_policy: flag_qc_exclude
+default_zero_shot_stations: ["LVV", "BEL", "MEA"]
+
+eval:
+  modes: ["M1", "M2", "M3_500km", "M3_1000km", "M4"]
+  m2_drop_frac: 0.25
+  m2_repeats: 5
+  min_obs: 10
+  stability_drop_fracs: [0.20, 0.30, 0.40]
+  stability_repeats: 5
+
+experiments:
+  # ---------------- Branch A: EM-PCA (k = 3, 4, 5) +/- Sq detrend ----------------
+  - tag: empca_k3_zscore
+    branch: A
+    model_type: empca
+    scaling: zscore_per_station
+    zero_shot: false
+    params: {k: 3, use_sq_detrend: false, n_em_iters: 20, ridge_eps: 1.0e-4}
+
+  - tag: empca_k4_zscore
+    branch: A
+    model_type: empca
+    scaling: zscore_per_station
+    zero_shot: false
+    params: {k: 4, use_sq_detrend: false, n_em_iters: 20, ridge_eps: 1.0e-4}
+
+  - tag: empca_k5_zscore
+    branch: A
+    model_type: empca
+    scaling: zscore_per_station
+    zero_shot: false
+    params: {k: 5, use_sq_detrend: false, n_em_iters: 20, ridge_eps: 1.0e-4}
+
+  - tag: empca_k3_sq_zscore
+    branch: A
+    model_type: empca
+    scaling: zscore_per_station
+    zero_shot: false
+    params: {k: 3, use_sq_detrend: true, n_em_iters: 20, ridge_eps: 1.0e-4, sq_l2_scale: 0.01}
+
+  - tag: empca_k4_sq_zscore
+    branch: A
+    model_type: empca
+    scaling: zscore_per_station
+    zero_shot: false
+    params: {k: 4, use_sq_detrend: true, n_em_iters: 20, ridge_eps: 1.0e-4, sq_l2_scale: 0.01}
+
+  - tag: empca_k5_sq_zscore
+    branch: A
+    model_type: empca
+    scaling: zscore_per_station
+    zero_shot: false
+    params: {k: 5, use_sq_detrend: true, n_em_iters: 20, ridge_eps: 1.0e-4, sq_l2_scale: 0.01}
+
+  # Note: EM-PCA and Ordinary Kriging under asinh_global are omitted from Phase 1 baseline runs
+  # because unbounded linear projections in asinh space exponentially blow up via s * sinh(pred)
+  # on auroral peaks (giving negative auroral R^2). Convex IDW and Tikhonov-regularized Ridge-Schur
+  # include asinh_global evaluations below.
+
+  # ---------------- Branch B (Standard M1–M4) ----------------
+  - tag: ridge_zscore
+    branch: B
+    model_type: ridge_schur
+    scaling: zscore_per_station
+    zero_shot: false
+    params:
+      alpha_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
+      n_em_iters: 20
+      shrinkage_gamma: 0.05
+
+  - tag: ridge_asinh
+    branch: B
+    model_type: ridge_schur
+    scaling: asinh_global
+    zero_shot: false
+    params:
+      alpha_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
+      n_em_iters: 20
+      shrinkage_gamma: 0.05
+
+  - tag: idw_mag_raw
+    branch: B
+    model_type: idw
+    scaling: none
+    zero_shot: false
+    params:
+      coord_metric: magnetic
+      power_grid: [1.5, 2.0, 3.0]
+      k_grid: [5, 10, null]
+      anisotropy_grid: [0.5, 1.0]
+
+  - tag: idw_mag_asinh
+    branch: B
+    model_type: idw
+    scaling: asinh_global
+    zero_shot: false
+    params:
+      coord_metric: magnetic
+      power_grid: [1.5, 2.0, 3.0]
+      k_grid: [5, 10, null]
+      anisotropy_grid: [0.5, 1.0]
+
+  - tag: idw_hav_raw
+    branch: B
+    model_type: idw
+    scaling: none
+    zero_shot: false
+    params:
+      coord_metric: haversine
+      power_grid: [1.5, 2.0, 3.0]
+      k_grid: [5, 10, null]
+
+  - tag: kriging_raw
+    branch: B
+    model_type: ordinary_kriging
+    scaling: none
+    zero_shot: false
+    params:
+      min_nugget_ratio: 0.01
+
+  # ---------------- Branch B (Zero-Shot Holdout: LVV, BEL, MEA) ----------------
+  - tag: idw_mag_raw_zs
+    branch: B
+    model_type: idw
+    scaling: none
+    zero_shot: true
+    params:
+      coord_metric: magnetic
+      power_grid: [1.5, 2.0, 3.0]
+      k_grid: [5, 10, null]
+      anisotropy_grid: [0.5, 1.0]
+
+  - tag: idw_mag_asinh_zs
+    branch: B
+    model_type: idw
+    scaling: asinh_global
+    zero_shot: true
+    params:
+      coord_metric: magnetic
+      power_grid: [1.5, 2.0, 3.0]
+      k_grid: [5, 10, null]
+      anisotropy_grid: [0.5, 1.0]
+
+  - tag: idw_hav_raw_zs
+    branch: B
+    model_type: idw
+    scaling: none
+    zero_shot: true
+    params:
+      coord_metric: haversine
+      power_grid: [1.5, 2.0, 3.0]
+      k_grid: [5, 10, null]
+
+  - tag: kriging_raw_zs
+    branch: B
+    model_type: ordinary_kriging
+    scaling: none
+    zero_shot: true
+    params:
+      min_nugget_ratio: 0.01

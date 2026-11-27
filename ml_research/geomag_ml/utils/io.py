@@ -141,6 +141,22 @@ def load_npz(path: Path) -> dict[str, np.ndarray]:
         return {key: archive[key] for key in archive.files}
 
 
+def portable_path_str(path: Path | str, *, repo_root: Path | None = None) -> str:
+    """Serialize a filesystem path portably relative to `repo_root` (or `ML_ROOT` in cloud bundles)."""
+    target = Path(path).resolve()
+    ml_root = Path(__file__).resolve().parents[2]
+    root = Path(repo_root).resolve() if repo_root is not None else ml_root.parent
+    if (root / "ml_research").is_dir():
+        try:
+            return target.relative_to(root).as_posix()
+        except ValueError:
+            pass
+    try:
+        return target.relative_to(ml_root).as_posix()
+    except ValueError:
+        return target.as_posix()
+
+
 def get_git_commit(repo_root: Path | None = None) -> str | None:
     """Return short git HEAD commit hash if available, otherwise None."""
     cwd = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[3]
