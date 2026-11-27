@@ -1,0 +1,51 @@
+# Declarative dataset configuration for October 2026 storms (read-only sources)
+mode: clean
+tag: oct2026_clean_v1
+undespiked_tag: oct2026_undespiked_v1
+
+processed_dir: data/processed
+raw_dir: GeoMag_Storms_Dataset_Oct-2026
+out_dir: ml_research/data_cache
+
+include_short_interp: true
+ballistic_ref_distance_km: 1400000.0
+ballistic_smooth_window_min: 31
+
+variation_step_policy: flag_qc_exclude
+variation_step_warn_nT: 30.0
+default_event_flag: storm
+
+qc_exclusions:
+  multi_minute_anomalies:
+    - station: VAL
+      episode_id: storm_20261009_11
+      start_utc: "2026-10-09T09:19:00Z"
+      end_utc: "2026-10-09T10:42:00Z"
+      reason: "Multi-minute Z drop (-1036 nT) and X/Y offset missed by 1-min despiker"
+    - station: OTT
+      episode_id: storm_20261021_23
+      start_utc: "2026-10-22T13:45:00Z"
+      end_utc: "2026-10-22T14:15:00Z"
+      reason: "Calibration/maintenance disturbance coinciding with missing scalar F"
+    - station: MEA
+      episode_id: storm_20261021_23
+      start_utc: "2026-10-23T17:54:00Z"
+      end_utc: "2026-10-23T18:43:00Z"
+      reason: "Multi-minute instrumental fault (-320 nT in Z, |d(|XYZ|-F)|=261.3 nT)"
+    - station: IZN
+      episode_id: storm_20261021_23
+      start_utc: "2026-10-23T07:10:00Z"
+      end_utc: "2026-10-23T07:13:00Z"
+      reason: "Pre/post spike distortion around 07:11Z despiked point"
+    - station: IZN
+      episode_id: storm_20261030_31
+      start_utc: "2026-10-30T07:16:00Z"
+      end_utc: "2026-10-30T07:19:00Z"
+      reason: "Local multi-minute drop (-157,-217,-289 nT) absent at neighboring PAG/SUA"
+  variation_baseline_steps:
+    - station: LON
+      episode_id: storm_20261030_31
+      reason: "Variation station baseline jump (+72..76 nT in Y)"
+    - station: SFS
+      episode_id: storm_20261009_11
+      reason: "Variation station baseline step (+60.8, +34.8, +36.5 nT) reverting in ep2"

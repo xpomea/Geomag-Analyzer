@@ -1,0 +1,18 @@
+# Generated datasets, external downloads, and run artifacts
+data_cache/
+data_external/
+artifacts/
+*.pt
+*.onnx
+*.npz
+
+# Python build and cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/

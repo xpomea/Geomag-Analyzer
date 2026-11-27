@@ -1,0 +1,35 @@
+# Template configuration for extended multi-month / quiet-day dataset ingestion (T0.5)
+mode: extended
+tag: extended_v1
+
+# Base October 2026 clean bundle to merge with external acquisitions (optional; set null to build standalone)
+base_npz: ml_research/data_cache/geomag_ml_oct2026_clean_v1.npz
+external_dir: ml_research/data_external
+out_dir: ml_research/data_cache
+
+# External data globs / directories (strictly read-only outside ml_research/data_cache)
+intermagnet_dirs:
+  - ml_research/data_external/intermagnet/*.min
+omni_files:
+  - ml_research/data_external/omni/*.asc
+kp_files:
+  - ml_research/data_external/kp/*.csv
+solar1_files: []
+oulu_files: []
+
+events_file: ml_research/configs/events_template.yaml
+auto_quiet_from_kp: true
+
+episode_gap_minutes: 60
+include_short_interp: true
+ballistic_ref_distance_km: 1400000.0
+ballistic_smooth_window_min: 31
+variation_step_policy: flag_qc_exclude
+variation_step_warn_nT: 30.0
+
+# Optional region override for newly added IAGA station codes ("Europe" or "Canada")
+station_region_overrides: {}
+
+qc_exclusions:
+  multi_minute_anomalies: []
+  variation_baseline_steps: []

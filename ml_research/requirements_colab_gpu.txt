@@ -1,0 +1,7 @@
+# Lightweight dependencies to ensure on Google Colab / Kaggle T4 GPU runtimes
+# (torch, numpy, scipy, pandas, matplotlib, scikit-learn are typically preinstalled)
+pyyaml>=6.0
+pyarrow>=15.0
+onnx>=1.16
+onnxruntime>=1.17
+pytest>=8.0

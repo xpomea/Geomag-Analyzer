@@ -1,0 +1,49 @@
+# Event registry template for extended dataset ingestion and Phase 5 eclipse/SPE protocols
+# Bit flags in event_flags: quiet_kp_le2=1, storm=2, eclipse=4, spe=8
+
+quiet_kp_le2:
+  # - label: "Quiet reference Oct 2026"
+  #   start_utc: "2026-10-01T00:00:00Z"
+  #   end_utc: "2026-10-03T23:59:00Z"
+
+storm:
+  - label: "Oct 4-5 2026 storm"
+    start_utc: "2026-10-04T00:00:00Z"
+    end_utc: "2026-10-05T23:59:00Z"
+  - label: "Oct 9-11 2026 storm"
+    start_utc: "2026-10-09T00:00:00Z"
+    end_utc: "2026-10-11T23:59:00Z"
+  - label: "Oct 21-23 2026 storm"
+    start_utc: "2026-10-21T00:00:00Z"
+    end_utc: "2026-10-23T23:59:00Z"
+  - label: "Oct 30-31 2026 storm"
+    start_utc: "2026-10-30T00:00:00Z"
+    end_utc: "2026-10-31T23:59:00Z"
+
+eclipse:
+  # Static center example:
+  # - label: "Static solar eclipse zone"
+  #   start_utc: "2026-08-12T16:30:00Z"
+  #   end_utc: "2026-08-12T19:30:00Z"
+  #   lat_deg: 50.0
+  #   lon_deg: 10.0
+  #   radius_km: 800.0
+  #
+  # Moving shadow track example (linearly interpolated in UTC):
+  # - label: "Moving solar eclipse track"
+  #   start_utc: "2026-08-12T17:00:00Z"
+  #   end_utc: "2026-08-12T19:00:00Z"
+  #   track:
+  #     - timestamp_utc: "2026-08-12T17:00:00Z"
+  #       lat_deg: 65.0
+  #       lon_deg: -20.0
+  #       radius_km: 750.0
+  #     - timestamp_utc: "2026-08-12T19:00:00Z"
+  #       lat_deg: 42.0
+  #       lon_deg: 3.0
+  #       radius_km: 750.0
+
+spe:
+  # - label: "Solar proton event"
+  #   start_utc: "2026-09-10T06:00:00Z"
+  #   end_utc: "2026-09-11T12:00:00Z"
